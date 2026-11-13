@@ -6,7 +6,7 @@
 
 use crate::config::Config;
 use crate::omnibox;
-use crate::platform;
+use crate::platform::{self, ChromeEvent};
 use crate::shield::{self, params, urlparts, Layer, Ledger, Shield, ShieldEvent, Verdict};
 use crate::theme::{self, THEMES};
 use crate::{AppWindow, LayerRow, LogRow, Suggestion, TabItem, Theme};
@@ -117,6 +117,10 @@ pub enum Msg {
     Ipc(u64, String),
     Shield(ShieldEvent),
     WebFocus,
+    Chrome(ChromeEvent),
+    WinMinimize,
+    WinMaximize,
+    WinClose,
 }
 
 thread_local! {
@@ -383,10 +387,14 @@ impl App {
         g.set_acc(theme::color(p.acc));
         g.set_mid(theme::color(p.mid));
         g.set_dim(theme::color(p.dim));
+        g.set_ok(theme::color(p.ok));
+        g.set_info(theme::color(p.info));
+        g.set_warn(theme::color(p.warn));
+        g.set_bad(theme::color(p.bad));
         g.set_name(p.short.into());
         g.set_font(self.cfg.font.clone().into());
         if let Some(h) = self.hwnd() {
-            platform::set_titlebar_dark(h, p.dark);
+            platform::style_frame(h, p.dark, p.bg3);
         }
         for t in &self.tabs {
             if let Some(wv) = &t.wv {
@@ -470,6 +478,11 @@ impl App {
                     });
                     return;
                 }
+                if let Some(h) = self.hwnd() {
+                    let custom = platform::install_titlebar(h, |e| post(Msg::Chrome(e)));
+                    self.ui.set_controls(custom && platform::CUSTOM_TITLEBAR);
+                    self.ui.set_zoomed(platform::is_maximized(h));
+                }
                 self.apply_theme();
                 if urls.is_empty() {
                     self.new_tab(None);
@@ -486,7 +499,29 @@ impl App {
                     self.run(c);
                 }
             }
-            Msg::Geometry => self.layout(),
+            Msg::Geometry => {
+                self.layout();
+                self.update_hitmap();
+            }
+            Msg::Chrome(e) => match e {
+                ChromeEvent::MaxHot(on) => self.ui.set_max_hot(on),
+                ChromeEvent::Active(on) => self.ui.set_window_active(on),
+                ChromeEvent::Maximized(on) => {
+                    self.ui.set_zoomed(on);
+                    self.update_hitmap();
+                }
+            },
+            Msg::WinMinimize => self.ui.window().set_minimized(true),
+            Msg::WinMaximize => match self.hwnd() {
+                Some(h) if cfg!(windows) => platform::toggle_maximize(h),
+                _ => {
+                    let w = self.ui.window();
+                    w.set_maximized(!w.is_maximized());
+                }
+            },
+            Msg::WinClose => {
+                let _ = slint::quit_event_loop();
+            }
             Msg::Submit(input) => {
                 let sel = self.ui.get_selected().max(0) as usize;
                 let target = self
@@ -627,7 +662,20 @@ impl App {
 
     // ------------------------------------------------------------- render
 
+    /// Tell the OS which bar pixels drag the window and which cell is
+    /// the maximize button. Read after layout so it is always current.
+    fn update_hitmap(&self) {
+        let ui = &self.ui;
+        platform::set_hitmap(platform::HitMap {
+            scale: ui.window().scale_factor(),
+            bar_h: 32.0,
+            drags: [(ui.get_drag1_x(), ui.get_drag1_w()), (ui.get_drag2_x(), ui.get_drag2_w())],
+            max_btn: if ui.get_controls() { (ui.get_max_x(), ui.get_max_w()) } else { (0.0, 0.0) },
+        });
+    }
+
     pub fn refresh(&mut self) {
+        self.update_hitmap();
         let ui = &self.ui;
         let a = self.active.min(self.tabs.len().saturating_sub(1));
         let Some(t) = self.tabs.get(a) else { return };

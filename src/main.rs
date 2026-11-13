@@ -46,6 +46,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_set_shield(|on| post(Msg::SetShield(on)));
     ui.on_page_focus(|| post(Msg::PageFocus));
     ui.on_geometry_changed(|| post(Msg::Geometry));
+    ui.on_win_minimize(|| post(Msg::WinMinimize));
+    ui.on_win_maximize(|| post(Msg::WinMaximize));
+    ui.on_win_close(|| post(Msg::WinClose));
     ui.on_shortcut(|text, ctrl, alt, shift| match app::combo_from_slint(&text, ctrl, alt, shift) {
         Some(c) => {
             post(Msg::Key(c));

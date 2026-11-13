@@ -59,6 +59,15 @@ safe while WebView2 pumps the message loop inside its own calls.
 costs ~10 MB private memory and is visible in ~0.25 s; background tabs are
 dropped to WebView2's low-memory state.
 
+**The bar is the title bar.** On Windows the native caption is removed
+but the frame stays, so Aero Snap, Win+arrows, resize borders and the
+minimize animation keep working (`platform/titlebar.rs`). Empty bar space
+on either side of the address drags the window (double-click maximizes,
+right-click opens the system menu); the maximize cell answers as the
+native maximize button, which enables the Windows 11 snap-layout flyout.
+Corners are square and the 1px border takes the theme colour. On Linux the
+compositor decorates or tiles the window, so the bar shows no controls.
+
 **Tiling, not overlays.** The page is a native child window, so nothing can
 be drawn over it. The shield panel and address suggestions *push* the page
 instead, like a tiled Hyprland split.
@@ -122,6 +131,7 @@ Mono` elsewhere), `shield` (master switch), `beacons` (`scramble` | `drop`).
 | | Windows (WebView2) | Linux (WebKitGTK) |
 | --- | --- | --- |
 | Chrome, tabs, themes | ✓ | builds against the same code; not yet tested |
+| Custom title bar + window controls | ✓ (snap layouts, square corners) | no: compositor decorations |
 | Navigation + params + runtime layers | ✓ | ✓ (engine-independent) |
 | Transport layer | ✓ | not yet: wry exposes no subresource hook; planned via WebKit content filters |
 | Native shortcuts while page focused | ✓ (`AcceleratorKeyPressed`) | in-page key listener fallback |

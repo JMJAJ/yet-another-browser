@@ -10,6 +10,11 @@ export global Theme {
     in-out property <color> acc: #ffffff;
     in-out property <color> mid: #a0a0a0;
     in-out property <color> dim: #606060;
+    // muted semantic tones: state only, never decoration
+    in-out property <color> ok: #8fa68b;
+    in-out property <color> info: #8597aa;
+    in-out property <color> warn: #b5a07a;
+    in-out property <color> bad: #bc8888;
     in-out property <string> name: "eclipse";
     in-out property <string> font: "Consolas";
 }
@@ -47,15 +52,75 @@ component Cell inherits Rectangle {
     }
 }
 
+// 1px stroke icon in a 32px bar cell (12x12 viewbox).
+component IconCell inherits Rectangle {
+    in property <string> commands;
+    in property <bool> enabled: true;
+    callback clicked;
+    width: 32px;
+    background: ta.has-hover && root.enabled ? Theme.bg1 : transparent;
+    animate background { duration: 80ms; }
+    Path {
+        x: (parent.width - 12px) / 2;
+        y: (parent.height - 12px) / 2;
+        width: 12px;
+        height: 12px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: root.commands;
+        stroke: root.enabled ? Theme.fg : Theme.dim;
+        stroke-width: 1px;
+        fill: transparent;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Window control: 46x32, glyph in a 10x10 viewbox. `hot` lets the OS drive
+// hover for the maximize cell, whose events arrive as non-client messages.
+component WinButton inherits Rectangle {
+    in property <string> commands;
+    in property <bool> danger;
+    in property <bool> hot;
+    in property <bool> show: true;
+    in property <bool> window-active: true;
+    callback clicked;
+    property <bool> lit: (ta.has-hover || root.hot) && root.show;
+    width: root.show ? 46px : 0px;
+    clip: true;
+    background: root.lit ? (root.danger ? Theme.bad : Theme.bg2) : transparent;
+    animate background { duration: 80ms; }
+    Path {
+        x: (parent.width - 10px) / 2;
+        y: (parent.height - 10px) / 2;
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.commands;
+        stroke: root.lit && root.danger ? Theme.bg0 : (root.window-active ? Theme.fg : Theme.mid);
+        stroke-width: 1px;
+        fill: transparent;
+    }
+    ta := TouchArea {
+        enabled: root.show;
+        clicked => { root.clicked(); }
+    }
+}
+
 component TabCell inherits Rectangle {
     in property <TabItem> item;
+    in property <bool> window-active: true;
     callback clicked;
     width: label.preferred-width + 22px;
-    background: root.item.active ? Theme.acc : (ta.has-hover ? Theme.bg1 : transparent);
+    // the accent marks only the window that has the keyboard
+    background: root.item.active ? (root.window-active ? Theme.acc : Theme.bg3) : (ta.has-hover ? Theme.bg1 : transparent);
     animate background { duration: 80ms; }
     label := Text {
         text: root.item.label;
-        color: root.item.active ? Theme.bg0 : Theme.mid;
+        color: root.item.active ? (root.window-active ? Theme.bg0 : Theme.fg) : Theme.mid;
         font-weight: root.item.active ? 700 : 400;
         vertical-alignment: center;
         horizontal-alignment: center;
@@ -105,6 +170,11 @@ export component AppWindow inherits Window {
     in property <string> strip-note;
     in-out property <int> selected;
     in property <bool> blank: true;
+    // title bar
+    in property <bool> controls;
+    in property <bool> zoomed;
+    in property <bool> window-active: true;
+    in property <bool> max-hot;
 
     // ---------------------------------------------------------- events out
     callback submit(string);
@@ -121,6 +191,9 @@ export component AppWindow inherits Window {
     callback complete(int);
     callback shortcut(string, bool, bool, bool) -> bool;
     callback geometry-changed();
+    callback win-minimize();
+    callback win-maximize();
+    callback win-close();
 
     // ----------------------------------------------------------- geometry
     property <length> bar-h: 33px;
@@ -135,6 +208,18 @@ export component AppWindow inherits Window {
     changed content-y => { root.geometry-changed(); }
     changed content-w => { root.geometry-changed(); }
     changed content-h => { root.geometry-changed(); }
+
+    // Regions the OS hit-tests: empty bar space drags the window, the
+    // maximize cell answers as the native maximize button (snap layouts).
+    out property <length> drag1-x: drag1.absolute-position.x;
+    out property <length> drag1-w: drag1.width;
+    out property <length> drag2-x: drag2.absolute-position.x;
+    out property <length> drag2-w: drag2.width;
+    out property <length> max-x: max-btn.absolute-position.x;
+    out property <length> max-w: max-btn.width;
+    changed drag1-x => { root.geometry-changed(); }
+    changed drag2-x => { root.geometry-changed(); }
+    changed drag2-w => { root.geometry-changed(); }
 
     public function focus-address() {
         addr.focus();
@@ -157,6 +242,8 @@ export component AppWindow inherits Window {
         }
 
         // =============================================================== bar
+        // One row that is also the title bar:
+        //   tabs | drag | back fwd reload address | drag | status | window controls
         Rectangle {
             x: 0;
             y: 0;
@@ -165,6 +252,7 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 for t[i] in root.tabs: TabCell {
                     item: t;
+                    window-active: root.window-active;
                     clicked => { root.tab-clicked(i); }
                 }
                 Cell {
@@ -173,88 +261,103 @@ export component AppWindow inherits Window {
                     pad: 11px;
                     clicked => { root.new-tab(); }
                 }
-                Rule { width: 1px; }
-                Cell {
-                    text: "<";
-                    enabled: root.can-back;
-                    clicked => { root.back(); }
-                }
-                Cell {
-                    text: ">";
-                    enabled: root.can-forward;
-                    clicked => { root.forward(); }
-                }
-                Cell {
-                    text: root.loading ? "x" : "r";
-                    enabled: !root.blank;
-                    clicked => { root.reload(); }
-                }
-                Rule { width: 1px; }
-                Rectangle {
+                drag1 := Rectangle {
                     horizontal-stretch: 1;
-                    background: addr.has-focus ? Theme.bg2 : transparent;
-                    border-width: addr.has-focus ? 1px : 0px;
-                    border-color: Theme.acc;
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 10px;
-                        Text {
-                            text: addr.has-focus ? ">" : root.security;
-                            color: addr.has-focus ? Theme.acc : Theme.mid;
-                            vertical-alignment: center;
-                        }
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            clip: true;
-                            addr := TextInput {
-                                width: parent.width;
-                                height: parent.height;
-                                text <=> root.address;
-                                single-line: true;
+                    min-width: 16px;
+                }
+                Rule { width: 1px; }
+                // grows to 600px before the drag gaps get any extra space
+                HorizontalLayout {
+                    horizontal-stretch: 6;
+                    min-width: 260px;
+                    max-width: 600px;
+                    IconCell {
+                        commands: "M7.5 2.5 L4 6 L7.5 9.5";
+                        enabled: root.can-back;
+                        clicked => { root.back(); }
+                    }
+                    IconCell {
+                        commands: "M4.5 2.5 L8 6 L4.5 9.5";
+                        enabled: root.can-forward;
+                        clicked => { root.forward(); }
+                    }
+                    IconCell {
+                        commands: root.loading ? "M3 3 L9 9 M9 3 L3 9" : "M9.6 4.2 A4 4 0 1 0 10 6 M10 1.5 L10 4.5 L7 4.5";
+                        enabled: !root.blank;
+                        clicked => { root.reload(); }
+                    }
+                    Rule { width: 1px; }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: addr.has-focus ? Theme.bg2 : transparent;
+                        border-width: addr.has-focus ? 1px : 0px;
+                        border-color: Theme.acc;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            Text {
+                                text: addr.has-focus ? ">" : root.security;
+                                color: addr.has-focus ? Theme.acc : (root.security == "http" ? Theme.warn : Theme.mid);
                                 vertical-alignment: center;
-                                color: Theme.fg;
-                                selection-background-color: Theme.acc;
-                                selection-foreground-color: Theme.bg0;
-                                text-cursor-width: 1px;
-                                accepted => {
-                                    root.submit(self.text);
-                                }
-                                edited => {
-                                    root.selected = 0;
-                                    root.edited(self.text);
-                                }
-                                key-pressed(e) => {
-                                    if (e.text == Key.Escape) {
-                                        root.page-focus();
-                                        return accept;
-                                    }
-                                    if (e.text == Key.DownArrow && root.suggestions.length > 0) {
-                                        root.selected = Math.min(root.selected + 1, root.suggestions.length - 1);
-                                        return accept;
-                                    }
-                                    if (e.text == Key.UpArrow && root.suggestions.length > 0) {
-                                        root.selected = Math.max(root.selected - 1, 0);
-                                        return accept;
-                                    }
-                                    if (e.text == Key.Tab && root.suggestions.length > 0) {
-                                        root.complete(root.selected);
-                                        return accept;
-                                    }
-                                    return reject;
-                                }
                             }
-                            if root.address == "" && !addr.has-focus: Text {
-                                x: 0;
-                                width: parent.width;
-                                height: parent.height;
-                                text: "url or search";
-                                color: Theme.mid;
-                                vertical-alignment: center;
-                                horizontal-alignment: left;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                clip: true;
+                                addr := TextInput {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text <=> root.address;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    color: Theme.fg;
+                                    selection-background-color: Theme.acc;
+                                    selection-foreground-color: Theme.bg0;
+                                    text-cursor-width: 1px;
+                                    accepted => {
+                                        root.submit(self.text);
+                                    }
+                                    edited => {
+                                        root.selected = 0;
+                                        root.edited(self.text);
+                                    }
+                                    key-pressed(e) => {
+                                        if (e.text == Key.Escape) {
+                                            root.page-focus();
+                                            return accept;
+                                        }
+                                        if (e.text == Key.DownArrow && root.suggestions.length > 0) {
+                                            root.selected = Math.min(root.selected + 1, root.suggestions.length - 1);
+                                            return accept;
+                                        }
+                                        if (e.text == Key.UpArrow && root.suggestions.length > 0) {
+                                            root.selected = Math.max(root.selected - 1, 0);
+                                            return accept;
+                                        }
+                                        if (e.text == Key.Tab && root.suggestions.length > 0) {
+                                            root.complete(root.selected);
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
+                                }
+                                if root.address == "" && !addr.has-focus: Text {
+                                    x: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text: "url or search";
+                                    color: Theme.mid;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: left;
+                                }
                             }
                         }
                     }
+                }
+                Rule { width: 1px; }
+                drag2 := Rectangle {
+                    horizontal-stretch: 1;
+                    min-width: 16px;
                 }
                 Rule { width: 1px; }
                 Rectangle {
@@ -266,7 +369,7 @@ export component AppWindow inherits Window {
                         spacing: 8px;
                         Text {
                             text: root.shield-on ? "shield" : "shield off";
-                            color: root.panel-open ? Theme.fg : Theme.mid;
+                            color: !root.shield-on ? Theme.bad : (root.panel-open ? Theme.fg : Theme.mid);
                             vertical-alignment: center;
                         }
                         if root.shield-on: Text {
@@ -287,6 +390,27 @@ export component AppWindow inherits Window {
                     fg: Theme.mid;
                     clicked => { root.cycle-theme(); }
                 }
+                Rule { width: root.controls ? 1px : 0px; }
+                WinButton {
+                    show: root.controls;
+                    window-active: root.window-active;
+                    commands: "M0 5.5 L10 5.5";
+                    clicked => { root.win-minimize(); }
+                }
+                max-btn := WinButton {
+                    show: root.controls;
+                    hot: root.max-hot;
+                    window-active: root.window-active;
+                    commands: root.zoomed ? "M0.5 2.5 L7.5 2.5 L7.5 9.5 L0.5 9.5 Z M2.5 2.5 L2.5 0.5 L9.5 0.5 L9.5 7.5 L7.5 7.5" : "M0.5 0.5 L9.5 0.5 L9.5 9.5 L0.5 9.5 Z";
+                    clicked => { root.win-maximize(); }
+                }
+                WinButton {
+                    show: root.controls;
+                    danger: true;
+                    window-active: root.window-active;
+                    commands: "M0 0 L10 10 M10 0 L0 10";
+                    clicked => { root.win-close(); }
+                }
             }
         }
         Rectangle {
@@ -299,7 +423,7 @@ export component AppWindow inherits Window {
                 x: 0;
                 width: parent.width * Math.max(0.04, Math.min(root.progress, 1.0));
                 height: 1px;
-                background: Theme.acc;
+                background: root.window-active ? Theme.acc : Theme.mid;
             }
         }
 

@@ -6,11 +6,8 @@ use std::rc::Rc;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{take_pwstr, AcceleratorKeyPressedEventHandler, FocusChangedEventHandler, WebResourceRequestedEventHandler};
 use windows::core::{Interface, HSTRING, PWSTR};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 use windows::Win32::UI::Shell::SHCreateMemStream;
-use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER};
 use wry::WebViewExtWindows;
 
 /// Chromium switches that silence the engine's own phone-home traffic.
@@ -219,26 +216,4 @@ pub fn set_background(wv: &wry::WebView, background: bool) {
 
 pub fn set_web_theme(wv: &wry::WebView, dark: bool) {
     let _ = wv.set_theme(if dark { wry::Theme::Dark } else { wry::Theme::Light });
-}
-
-pub fn set_titlebar_dark(hwnd: isize, dark: bool) {
-    let v: i32 = dark as i32;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            HWND(hwnd as *mut _),
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &v as *const i32 as *const _,
-            std::mem::size_of::<i32>() as u32,
-        );
-        // DWM only repaints the caption on a frame change.
-        let _ = SetWindowPos(
-            HWND(hwnd as *mut _),
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
-    }
 }
