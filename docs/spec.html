@@ -1,0 +1,1487 @@
+<title>Brxswer Interface Spec</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* layout: state tree rail | live window on a stage | spec grid under it.
+   Tokens are the Orrery palettes; JS swaps them when the theme changes. */
+:root {
+  --b0: #0a0a0a; --b1: #141414; --b2: #1e1e1e; --b3: #282828; --b4: #333333;
+  --fg: #e8e8e8; --acc: #ffffff; --mid: #a0a0a0; --dim: #606060;
+  --ok: #8fa68b; --info: #8597aa; --warn: #b5a07a; --bad: #bc8888; --crit: #bc8888; --xbg: #bc8888; --xfg: #0a0a0a;
+  --mono: 'JetBrains Mono', Consolas, 'Cascadia Mono', 'DejaVu Sans Mono', monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --b0: #f4f4f4; --b1: #ebebeb; --b2: #e2e2e2; --b3: #d4d4d4; --b4: #c6c6c6;
+    --fg: #141414; --acc: #000000; --mid: #5e5e5e; --dim: #7a7a7a;
+    --ok: #3b5f3c; --info: #3a5470; --warn: #6a521e; --bad: #7e3d3f; --crit: #7e3d3f; --xbg: #7e3d3f; --xfg: #f4f4f4; color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--b0); color: var(--fg); font: 12px/1.5 var(--mono); }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input { font: inherit; color: inherit; }
+:focus-visible { outline: 1px solid var(--acc); outline-offset: -1px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ------------------------------------------------------------ page frame */
+.top { display: flex; flex-wrap: wrap; align-items: stretch; border-bottom: 1px solid var(--b3); min-height: 32px;
+  padding-left: max(0px, env(safe-area-inset-left, 0px)); padding-right: max(0px, env(safe-area-inset-right, 0px)); }
+.top .name { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-right: 1px solid var(--b3); }
+.top .name b { letter-spacing: 1px; }
+.top .name span { color: var(--mid); }
+.top .grow { flex: 1; }
+.top .hint { display: flex; align-items: center; padding: 0 16px; color: var(--mid); }
+.themes { display: flex; border-left: 1px solid var(--b3); }
+.themes button { padding: 0 12px; min-height: 32px; color: var(--mid); border-right: 1px solid var(--b3); display: flex; align-items: center; gap: 8px; }
+.themes button[aria-pressed="true"] { background: var(--acc); color: var(--b0); font-weight: 700; }
+.themes i { width: 8px; height: 8px; display: inline-block; border: 1px solid currentColor; }
+
+.layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: calc(100% - 33px); }
+.tree { border-right: 1px solid var(--b3); padding: 12px 0 24px; position: sticky; top: 0; align-self: start; max-height: 100vh; overflow: auto; }
+.tree h2 { font-size: 12px; margin: 14px 16px 6px; color: var(--mid); font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
+.tree h2:first-child { margin-top: 0; }
+.tree button { display: flex; width: 100%; text-align: left; padding: 4px 16px 4px 28px; gap: 8px; color: var(--fg); position: relative; }
+.tree button::before { content: ""; position: absolute; left: 16px; top: 0; bottom: 0; width: 1px; background: var(--b3); }
+.tree button:hover { background: var(--b1); }
+.tree button[aria-current="true"] { background: var(--acc); color: var(--b0); font-weight: 700; }
+.tree button[aria-current="true"]::before { background: var(--b0); }
+.tree .tsel { display: none; }
+
+main { min-width: 0; padding: 20px max(16px, env(safe-area-inset-right, 0px)) 40px 20px; display: flex; flex-direction: column; gap: 20px; }
+.stage { background: var(--b1); border: 1px solid var(--b3); position: relative; overflow: hidden; }
+.stage .cap { display: flex; justify-content: space-between; gap: 12px; padding: 6px 10px; color: var(--mid); border-bottom: 1px solid var(--b3); flex-wrap: wrap; }
+.stage .cap b { color: var(--fg); }
+.scalebox { position: relative; }
+.scaler { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.dock { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.dock button { border: 1px solid var(--b3); background: var(--b0); padding: 10px 16px; color: var(--fg); }
+.dock button:hover { border-color: var(--acc); }
+
+.spec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid var(--b3); }
+.spec > header { grid-column: 1 / -1; padding: 14px 16px; border-bottom: 1px solid var(--b3); display: flex; flex-direction: column; gap: 4px; }
+.spec > header h1 { margin: 0; font-size: 14px; text-wrap: balance; }
+.spec > header p { margin: 0; color: var(--mid); max-width: 90ch; }
+.spec section { padding: 14px 16px; border-right: 1px solid var(--b3); min-width: 0; }
+.spec section:last-child { border-right: 0; }
+.spec h3 { margin: 0 0 10px; font-size: 12px; font-weight: 400; color: var(--mid); letter-spacing: 1px; text-transform: uppercase; }
+.spec ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.spec li { padding-left: 14px; position: relative; overflow-wrap: anywhere; }
+.spec li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 1px; background: var(--mid); }
+.spec kbd { font: inherit; color: var(--acc); }
+.spec .keys li { padding-left: 0; display: grid; grid-template-columns: minmax(96px, auto) 1fr; gap: 12px; }
+.spec .keys li::before { display: none; }
+.spec code { color: var(--acc); }
+
+@media (max-width: 1000px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .tree { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--b3); padding: 10px 16px; }
+  .tree h2, .tree button { display: none; }
+  .tree .tsel { display: block; width: 100%; background: var(--b1); border: 1px solid var(--b3); padding: 6px 8px; color: var(--fg); border-radius: 0; }
+  main { padding: 16px max(16px, env(safe-area-inset-right, 0px)) 32px max(16px, env(safe-area-inset-left, 0px)); }
+  .spec { grid-template-columns: minmax(0, 1fr); }
+  .spec section { border-right: 0; border-bottom: 1px solid var(--b3); }
+  .top .hint { display: none; }
+}
+
+/* ======================================================== the window */
+.win { width: 1120px; height: 700px; background: var(--b0); color: var(--fg); border: 1px solid var(--b3);
+  position: relative; display: flex; flex-direction: column; overflow: hidden; outline: none; user-select: none; }
+.win.max { border-color: transparent; }
+.win.narrow { width: 640px; }
+.win.eph { border-top: 1px solid var(--acc); }
+.win .ic { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1; display: block; }
+.win .ic.c { shape-rendering: crispEdges; }
+
+/* bar */
+.bar { height: 33px; flex: 0 0 33px; display: flex; align-items: stretch; border-bottom: 1px solid var(--b3); position: relative; background: var(--b0); }
+.bar > * { flex-shrink: 0; }
+.bar .drag { flex: 1 1 0; min-width: 16px; }
+.cells { display: flex; align-items: stretch; }
+.cell { height: 32px; min-width: 32px; padding: 0 11px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--fg);
+  transition: background-color 80ms linear, color 80ms linear; white-space: nowrap; }
+.cell:hover { background: var(--b1); }
+.cell[disabled] { color: var(--dim); cursor: default; }
+.cell[disabled]:hover { background: none; }
+.cell.on { background: var(--b2); }
+.cell.mute { color: var(--mid); }
+.rule { width: 1px; background: var(--b3); flex: 0 0 1px; }
+.eph-tag { background: var(--acc); color: var(--b0); font-weight: 700; padding: 0 10px; display: flex; align-items: center; }
+
+.tab { position: relative; height: 32px; padding: 0 11px; display: flex; align-items: center; gap: 6px; color: var(--mid); border-right: 1px solid var(--b3);
+  transition: background-color 80ms linear, color 80ms linear; white-space: nowrap; }
+.tab:hover { background: var(--b1); }
+.tab.on { background: var(--acc); color: var(--b0); font-weight: 700; }
+.win.blur .tab.on { background: var(--b3); color: var(--fg); }
+.tab.pin { background: var(--b2); color: var(--fg); }
+.tab.pin.on { background: var(--acc); color: var(--b0); }
+.tab.trim { color: var(--dim); }
+.tab.crash { color: var(--bad); text-decoration: line-through; }
+.tab .ld { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--mid); }
+.tab.on .ld { background: var(--b0); opacity: .5; }
+.tab .x { display: none; margin-right: -4px; padding: 2px; }
+.tab:hover .x, .tab.on .x { display: block; }
+.tab.pin .x { display: none !important; }
+.tab .x:hover { background: var(--b3); color: var(--fg); }
+.tab.on .x:hover { background: var(--b0); color: var(--acc); }
+.tab.drop-l::before { content: ""; position: absolute; left: -1px; top: 0; bottom: 0; width: 2px; background: var(--acc); }
+.tab.dragging { outline: 1px solid var(--acc); outline-offset: -1px; background: transparent !important; color: var(--mid) !important; }
+.tab .snd { display: block; }
+.tab .snd:hover { color: var(--fg); }
+
+/* the address group gives up width first, so window controls never leave the bar */
+.center { display: flex; align-items: stretch; flex: 0 1 600px; min-width: 260px; border-left: 1px solid var(--b3); border-right: 1px solid var(--b3); }
+.win.narrow .center { flex-basis: 300px; min-width: 200px; }
+.addr { flex: 1; min-width: 0; display: flex; align-items: stretch; position: relative; }
+.addr.focus { background: var(--b2); outline: 1px solid var(--acc); outline-offset: -1px; }
+.win.blur .addr.focus { outline-color: var(--mid); }
+.sec { padding: 0 10px 0 12px; display: flex; align-items: center; color: var(--mid); }
+.sec:hover { background: var(--b1); color: var(--fg); }
+.sec.http { color: var(--warn); }
+.sec.brx { color: var(--acc); }
+.sec.blk { color: var(--bad); }
+.url { flex: 1; min-width: 0; text-align: left; display: flex; align-items: center; overflow: hidden; white-space: nowrap; padding-right: 12px; cursor: text; }
+.url b { color: var(--fg); font-weight: 700; }
+.url span { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
+.url .plh { color: var(--mid); }
+.addr input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 0 12px 0 0; }
+.addr .gt { padding: 0 10px 0 12px; display: flex; align-items: center; color: var(--acc); }
+.addr .bell { padding: 0 8px; display: flex; align-items: center; color: var(--mid); }
+
+.wc { display: flex; border-left: 1px solid var(--b3); }
+.wc button { width: 46px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--fg); transition: background-color 80ms linear, color 80ms linear; }
+.wc button:hover { background: var(--b2); }
+.wc button.close:hover { background: var(--xbg); color: var(--xfg); }
+.win.blur .wc button { color: var(--mid); }
+.progress { position: absolute; left: 0; bottom: -1px; height: 1px; background: var(--acc); }
+.win.blur .progress { background: var(--mid); }
+.hotzone { position: absolute; left: 0; right: 0; top: 0; height: 6px; z-index: 30; }
+.win.fs .bar { position: absolute; left: 0; right: 0; top: 0; z-index: 25; }
+
+/* strips that tile under the bar */
+.strip { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 29px; border-bottom: 1px solid var(--b3); flex: 0 0 auto; white-space: nowrap; }
+.strip .tag { width: 44px; text-align: center; color: var(--mid); }
+.strip .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.strip .note { color: var(--mid); }
+.strip.sel { background: var(--b2); }
+.strip.sel .tag { background: var(--acc); color: var(--b0); font-weight: 700; }
+.strip.hov:hover { background: var(--b1); cursor: pointer; }
+.strip.sel.hov:hover { background: var(--b2); }
+.strip s { color: var(--mid); }
+.strip .acc { color: var(--acc); }
+.btn { border: 1px solid var(--b3); padding: 2px 10px; color: var(--fg); }
+.btn:hover { border-color: var(--mid); background: var(--b1); }
+.btn.pri { background: var(--acc); color: var(--b0); border-color: var(--acc); font-weight: 700; }
+.btn.pri:hover { background: var(--fg); }
+
+.body { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.row { flex: 1; display: flex; min-height: 0; }
+.pagecol { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+.page { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+.foot { height: 25px; flex: 0 0 25px; border-top: 1px solid var(--b3); display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 12px; color: var(--mid); white-space: nowrap; overflow: hidden; }
+.foot span:first-child { overflow: hidden; text-overflow: ellipsis; }
+
+/* find bar */
+.find { height: 29px; flex: 0 0 29px; border-top: 1px solid var(--b3); display: flex; align-items: stretch; background: var(--b0); }
+.find label { padding: 0 12px; display: flex; align-items: center; color: var(--mid); }
+.find input { flex: 1; min-width: 0; border: 0; outline: 0; background: var(--b2); padding: 0 10px; }
+.find .cnt { padding: 0 12px; display: flex; align-items: center; color: var(--mid); min-width: 64px; justify-content: center; }
+.find .cnt.none { color: var(--bad); }
+.find .cell { height: 28px; border-left: 1px solid var(--b3); }
+
+/* panels (tile right) */
+.panel { width: 361px; flex: 0 0 361px; border-left: 1px solid var(--b3); display: flex; flex-direction: column; background: var(--b0); min-height: 0; }
+.ph { height: 32px; flex: 0 0 32px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--b3); }
+.ph b { letter-spacing: 1px; }
+.seg { display: flex; border: 1px solid var(--b3); height: 20px; }
+.seg button { padding: 0 8px; color: var(--mid); display: flex; align-items: center; }
+.seg button:hover { background: var(--b1); color: var(--fg); }
+.seg button[aria-pressed="true"] { background: var(--acc); color: var(--b0); }
+.seg.warn button[aria-pressed="true"] { background: var(--warn); color: var(--b0); }
+.pbody { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--b3); }
+.prow { display: flex; align-items: center; gap: 10px; min-height: 18px; }
+.prow .k { width: 18px; height: 18px; background: var(--mid); color: var(--b0); font-weight: 700; display: flex; align-items: center; justify-content: center; flex: 0 0 18px; }
+.prow .g { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow .n { color: var(--acc); font-weight: 700; }
+.muted { color: var(--mid); }
+.log { flex: 1; min-height: 0; overflow: hidden; padding: 0 12px; display: flex; flex-direction: column; gap: 9px; }
+.log div { display: flex; gap: 10px; white-space: nowrap; }
+.log div span:first-child { width: 18px; color: var(--mid); flex: 0 0 18px; }
+.log div span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.pfoot { height: 28px; flex: 0 0 28px; border-top: 1px solid var(--b3); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; color: var(--mid); }
+.pfoot button:hover { color: var(--fg); }
+.dl { padding: 10px 12px; border-bottom: 1px solid var(--b3); display: flex; flex-direction: column; gap: 6px; }
+.dl .top2 { display: flex; justify-content: space-between; gap: 10px; }
+.dl .top2 b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl .bar1 { height: 1px; background: var(--b3); }
+.dl .bar1 i { display: block; height: 1px; background: var(--acc); }
+.dl .acts { display: flex; gap: 14px; color: var(--mid); }
+.dl .acts button:hover { color: var(--fg); }
+.dl.fail .st { color: var(--bad); }
+
+/* internal pages */
+.ipage { position: absolute; inset: 0; background: var(--b0); display: flex; flex-direction: column; }
+.iend { margin-top: auto; padding: 16px 24px 24px; border-top: 1px solid var(--b3); display: flex; flex-direction: column; gap: 10px; }
+.iend .t { font-weight: 700; }
+.iend .acts { display: flex; gap: 8px; margin-top: 6px; }
+.keymap { margin-top: auto; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 200px)); gap: 24px; }
+.keymap div { border-top: 1px solid var(--b3); padding-top: 12px; display: grid; grid-template-columns: 96px 1fr; row-gap: 8px; }
+.keymap .k { color: var(--acc); }
+.keymap h4 { grid-column: 1 / -1; margin: 0; font-weight: 400; color: var(--mid); }
+.keymap button { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keymap button:hover { color: var(--acc); }
+.hist { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.hist .hs { display: flex; align-items: stretch; height: 32px; border-bottom: 1px solid var(--b3); }
+.hist .hs input { flex: 1; border: 0; outline: 0; background: transparent; padding: 0 12px; }
+.hist .hs .cell { border-left: 1px solid var(--b3); color: var(--mid); }
+.hist .day { padding: 14px 24px 6px; color: var(--mid); }
+.hist .hr { display: grid; grid-template-columns: 56px minmax(0, 1fr) 200px 28px; gap: 12px; padding: 0 24px; height: 26px; align-items: center; }
+.hist .hr:hover { background: var(--b1); }
+.hist .hr .ti { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .hr .ho { color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .hr .del { visibility: hidden; color: var(--mid); }
+.hist .hr:hover .del { visibility: visible; }
+.hist .hr .del:hover { color: var(--fg); }
+.hist .list { overflow: hidden; flex: 1; }
+.set { display: flex; flex: 1; min-height: 0; }
+.set nav { width: 180px; border-right: 1px solid var(--b3); display: flex; flex-direction: column; padding: 12px 0; }
+.set nav button { text-align: left; padding: 6px 16px; color: var(--mid); }
+.set nav button:hover { color: var(--fg); background: var(--b1); }
+.set nav button[aria-current="true"] { color: var(--b0); background: var(--acc); font-weight: 700; }
+.set .sc { flex: 1; padding: 20px 28px; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+.set .sc h4 { margin: 0 0 12px; font-size: 12px; letter-spacing: 1px; }
+.set .sr { display: grid; grid-template-columns: 220px 1fr; gap: 16px; padding: 10px 0; border-top: 1px solid var(--b3); align-items: center; }
+.set .sr .d { color: var(--mid); grid-column: 2; margin-top: -8px; }
+.set .sw { display: flex; gap: 0; border: 1px solid var(--b3); width: max-content; }
+.set .sw button { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; border-right: 1px solid var(--b3); }
+.set .sw button:last-child { border-right: 0; }
+.set .sw button[aria-pressed="true"] { outline: 1px solid var(--acc); outline-offset: -1px; }
+.set .sw span { display: flex; }
+.set .sw i { width: 14px; height: 14px; display: block; }
+.set .tin { border: 1px solid var(--b3); background: var(--b1); padding: 4px 8px; outline: 0; width: 100%; max-width: 420px; }
+.set .tin:focus { border-color: var(--acc); }
+.set textarea.tin { font: inherit; color: inherit; height: 96px; resize: none; display: block; }
+
+/* semantic tones: muted colour as text over a ~22% tint of itself.
+   They say allowed / asking / paused / refused at a glance and never
+   out-shout the accent, which stays reserved for focus and selection. */
+.t-ok { --tone: var(--ok); } .t-info { --tone: var(--info); } .t-warn { --tone: var(--warn); } .t-bad { --tone: var(--bad); }
+.seg button[aria-pressed="true"][class*="t-"] { background: color-mix(in srgb, var(--tone) 22%, var(--b0)); color: var(--tone); }
+.seg button[class*="t-"]:not([aria-pressed="true"]):hover { color: var(--tone); }
+.btn[class*="t-"] { color: var(--tone); border-color: color-mix(in srgb, var(--tone) 45%, var(--b3)); }
+.btn[class*="t-"]:hover { background: color-mix(in srgb, var(--tone) 18%, var(--b0)); border-color: var(--tone); }
+.btn.fill[class*="t-"] { background: color-mix(in srgb, var(--tone) 22%, var(--b0)); }
+.chip { display: inline-flex; align-items: center; padding: 0 6px; height: 18px; color: var(--tone); background: color-mix(in srgb, var(--tone) 20%, var(--b0)); }
+.toast[class*="t-"] { border-color: var(--tone); }
+.toast[class*="t-"] span:first-child { color: var(--tone); }
+.prow .k[class*="t-"] { background: color-mix(in srgb, var(--tone) 26%, var(--b0)); color: var(--tone); }
+.log div span.k[class*="t-"] { color: var(--tone); }
+.tones { display: grid; grid-template-columns: 120px repeat(4, minmax(0, 1fr)); border: 1px solid var(--b3); margin-top: 4px; }
+.tones > * { padding: 6px 10px; border-right: 1px solid var(--b3); border-bottom: 1px solid var(--b3); display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.tones i { width: 10px; height: 10px; display: block; flex: 0 0 10px; }
+
+/* the web (sites own their look) */
+.site { position: absolute; inset: 0; background: #ffffff; color: #1d1d1f; font: 15px/1.6 Georgia, 'Times New Roman', serif; padding: 36px 64px; overflow: hidden; user-select: text; }
+.site .kick { font: 12px/1.4 system-ui, sans-serif; color: #6b6b6b; text-transform: uppercase; letter-spacing: 1px; }
+.site h1 { font: 700 30px/1.2 Georgia, serif; margin: 8px 0 18px; max-width: 26ch; }
+.site p { max-width: 62ch; margin: 0 0 14px; }
+.site a { color: #0b57d0; text-decoration: underline; }
+.site mark { background: #ffe58a; color: inherit; }
+.site mark.cur { background: #ff9d3c; }
+.site .sk { height: 12px; background: #eeeeee; margin: 10px 0; max-width: 62ch; }
+.site.dark { background: #16181d; color: #d7dae0; }
+.site.dark .kick { color: #9097a3; }
+.site.dark a { color: #8ab4f8; }
+
+/* floating, transient: owned popup windows in the real build */
+.pop { position: absolute; z-index: 40; background: var(--b0); border: 1px solid var(--b3); min-width: 220px; padding: 4px 0; }
+.pop .mi { display: flex; width: 100%; align-items: center; gap: 16px; padding: 0 12px; height: 26px; text-align: left; color: var(--fg); }
+.pop .mi:hover, .pop .mi.hl { background: var(--b2); }
+.pop .mi .k { margin-left: auto; color: var(--mid); }
+.pop .mi[disabled] { color: var(--dim); cursor: default; }
+.pop .mi[disabled]:hover { background: none; }
+.pop .sep { height: 1px; background: var(--b3); margin: 4px 0; }
+.pop .mrow { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 30px; }
+.pop .mrow .grow { flex: 1; }
+.pop .mrow .seg button { min-width: 26px; justify-content: center; }
+.pop .sws { display: flex; border: 1px solid var(--b3); }
+.pop .sws button { width: 26px; height: 20px; display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--b3); }
+.pop .sws button:last-child { border-right: 0; }
+.pop .sws i { width: 10px; height: 10px; display: block; }
+.pop .sws button[aria-pressed="true"] { outline: 1px solid var(--acc); outline-offset: -1px; }
+.tip { position: absolute; z-index: 45; background: var(--b0); border: 1px solid var(--b3); padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; max-width: 360px; pointer-events: none; }
+.tip .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { position: absolute; z-index: 45; left: 0; bottom: 0; background: var(--b0); border: 1px solid var(--b3); border-left: 0; border-bottom: 0; padding: 4px 10px; max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.status s { color: var(--mid); }
+.status .acc { color: var(--acc); }
+.toast { position: absolute; z-index: 50; right: 12px; bottom: 12px; background: var(--b0); border: 1px solid var(--acc); display: flex; align-items: stretch; }
+.toast span { padding: 7px 12px; }
+.toast button { border-left: 1px solid var(--b3); padding: 0 12px; color: var(--acc); }
+.toast button:hover { background: var(--b2); }
+.pal { position: absolute; z-index: 60; left: 50%; top: 44px; width: 600px; margin-left: -300px; background: var(--b0); border: 1px solid var(--acc); }
+.win.narrow .pal { width: 560px; margin-left: -280px; }
+.pal .pi { display: flex; align-items: stretch; height: 32px; border-bottom: 1px solid var(--b3); }
+.pal .pi span { padding: 0 10px 0 12px; display: flex; align-items: center; color: var(--acc); }
+.pal .pi input { flex: 1; border: 0; outline: 0; background: transparent; }
+.pal .pr { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 28px; width: 100%; text-align: left; }
+.pal .pr .tg { width: 44px; text-align: center; color: var(--mid); }
+.pal .pr .g { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal .pr .k { color: var(--mid); }
+.pal .pr.sel { background: var(--b2); }
+.pal .pr.sel .tg { background: var(--acc); color: var(--b0); font-weight: 700; }
+.pal .pf { height: 24px; border-top: 1px solid var(--b3); display: flex; align-items: center; gap: 18px; padding: 0 12px; color: var(--mid); }
+.site-info { width: 380px; padding: 0; }
+.site-info .sh { padding: 10px 12px; border-bottom: 1px solid var(--b3); display: flex; flex-direction: column; gap: 3px; }
+.site-info .sb { padding: 10px 12px; border-bottom: 1px solid var(--b3); display: flex; flex-direction: column; gap: 8px; }
+.site-info .sb:last-child { border-bottom: 0; }
+.site-info .line { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.site-info a, .linkish { color: var(--acc); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+</style>
+
+<header class="top">
+  <div class="name"><b>BRXSWER</b><span>interface spec · v0.3 draft</span></div>
+  <div class="hint">click inside the window to drive it with keys</div>
+  <div class="grow"></div>
+  <div class="themes" id="themes" role="group" aria-label="Theme"></div>
+</header>
+
+<div class="layout">
+  <nav class="tree" id="tree" aria-label="States"></nav>
+  <main>
+    <div class="stage">
+      <div class="cap"><span>state · <b id="capname">—</b></span><span id="capnote">menus, cards and toasts drawn over the page are separate owned popup windows in the build</span></div>
+      <div class="scalebox" id="scalebox">
+        <div class="scaler" id="scaler"><div class="win" id="win" tabindex="0" aria-label="Prototype browser window"></div></div>
+        <div class="dock" id="dock" hidden></div>
+      </div>
+    </div>
+    <article class="spec" id="spec" aria-live="polite"></article>
+  </main>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+// ------------------------------------------------------------- palettes
+var PAL = {
+  eclipse: { name: 'eclipse', title: 'Eclipse', dark: true, b0: '#0a0a0a', b1: '#141414', b2: '#1e1e1e', b3: '#282828', b4: '#333333', fg: '#e8e8e8', acc: '#ffffff', mid: '#a0a0a0', dim: '#606060', ok: '#8fa68b', info: '#8597aa', warn: '#b5a07a', bad: '#bc8888', crit: '#bc8888', xbg: '#bc8888', xfg: '#0a0a0a' },
+  zenith: { name: 'zenith', title: 'Zenith', dark: false, b0: '#f4f4f4', b1: '#ebebeb', b2: '#e2e2e2', b3: '#d4d4d4', b4: '#c6c6c6', fg: '#141414', acc: '#000000', mid: '#5e5e5e', dim: '#7a7a7a', ok: '#3b5f3c', info: '#3a5470', warn: '#6a521e', bad: '#7e3d3f', crit: '#7e3d3f', xbg: '#7e3d3f', xfg: '#f4f4f4' },
+  mocha: { name: 'mocha', title: 'Catppuccin Mocha', dark: true, b0: '#11111b', b1: '#181825', b2: '#1e1e2e', b3: '#313244', b4: '#45475a', fg: '#cdd6f4', acc: '#b4befe', mid: '#a6adc8', dim: '#7f849c', ok: '#93b893', info: '#8ea5d4', warn: '#d6c18f', bad: '#d18b9c', crit: '#d18b9c', xbg: '#d18b9c', xfg: '#11111b' },
+  cassini: { name: 'cassini', title: 'Cassini', dark: true, b0: '#110b0b', b1: '#181010', b2: '#211717', b3: '#362826', b4: '#4a3632', fg: '#e4ebe8', acc: '#9fd8ce', mid: '#94a29e', dim: '#676e6b', ok: '#93b597', info: '#8fa4c0', warn: '#d2b073', bad: '#c88471', crit: '#c88471', xbg: '#c88471', xfg: '#110b0b' }
+};
+var ORDER = ['eclipse', 'zenith', 'mocha', 'cassini'];
+
+// ---------------------------------------------------------------- icons
+var I = {
+  back: '<svg class="ic" viewBox="0 0 12 12"><path d="M7.5 2.5 4 6l3.5 3.5"/></svg>',
+  fwd: '<svg class="ic" viewBox="0 0 12 12"><path d="M4.5 2.5 8 6 4.5 9.5"/></svg>',
+  reload: '<svg class="ic" viewBox="0 0 12 12"><path d="M9.6 4.2A4 4 0 1 0 10 6"/><path d="M10 1.5v3H7"/></svg>',
+  stop: '<svg class="ic" viewBox="0 0 12 12"><path d="m3 3 6 6M9 3 3 9"/></svg>',
+  menu: '<svg class="ic c" viewBox="0 0 12 12"><path d="M2 3.5h8M2 6.5h8M2 9.5h8"/></svg>',
+  min: '<svg class="ic c" viewBox="0 0 12 12"><path d="M1 6.5h10"/></svg>',
+  max: '<svg class="ic c" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9"/></svg>',
+  rest: '<svg class="ic c" viewBox="0 0 12 12"><rect x="1.5" y="3.5" width="7" height="7"/><path d="M3.5 3.5v-2h7v7h-2"/></svg>',
+  close: '<svg class="ic" viewBox="0 0 12 12"><path d="m1.5 1.5 9 9M10.5 1.5l-9 9"/></svg>',
+  x: '<svg class="ic" viewBox="0 0 12 12" style="width:10px;height:10px"><path d="m3 3 6 6M9 3 3 9"/></svg>',
+  snd: '<svg class="ic" viewBox="0 0 12 12" style="width:11px;height:11px"><path d="M1.5 4.5h2l3-2.5v8l-3-2.5h-2z"/><path d="M8.5 4.2c.9 1 .9 2.6 0 3.6"/></svg>',
+  muted: '<svg class="ic" viewBox="0 0 12 12" style="width:11px;height:11px"><path d="M1.5 4.5h2l3-2.5v8l-3-2.5h-2z"/><path d="m8 4.5 3 3M11 4.5l-3 3"/></svg>',
+  bell: '<svg class="ic" viewBox="0 0 12 12"><path d="M3 8.5V5.5a3 3 0 0 1 6 0v3l1 1H2z"/><path d="M5 10.5h2"/><path d="m1.5 1.5 9 9"/></svg>'
+};
+
+// ------------------------------------------------------------- content
+var ARTICLES = {
+  rings: {
+    kick: 'Planetary science · 6 min read',
+    title: "Why Saturn's rings are almost pure ice",
+    paras: [
+      "Saturn's main rings reflect more sunlight than almost anything else in the solar system. Spectra show water ice making up over 95 percent of the ring material, with only a thin dusting of silicates and organics.",
+      "That purity is a puzzle. Micrometeoroids should darken the rings over time, the way soot settles on snow. During {L0} the spacecraft flew between the planet and the innermost ring and measured how fast that dust arrives.",
+      "The answer constrains the rings' age. If the pollution rate holds, the rings we see today are a few hundred million years old, young compared with the planet. Not every team agrees: the {L1} leaves room for older rings that clean themselves.",
+      "New results land every few months. {L2} to get them when they do."
+    ],
+    links: [
+      { text: "Cassini's final orbits", url: 'https://archive.ring-dynamics.example/cassini/grand-finale?utm_source=newsletter&utm_medium=email&id=88', clean: 'https://archive.ring-dynamics.example/cassini/grand-finale?id=88', removed: ['utm_source', 'utm_medium'] },
+      { text: 'spectral data', url: 'https://data.ring-dynamics.example/spectra/vims' },
+      { text: 'Subscribe', url: 'https://ring-dynamics.example/subscribe?fbclid=IwAR0x&plan=free', clean: 'https://ring-dynamics.example/subscribe?plan=free', removed: ['fbclid'] }
+    ]
+  },
+  wry: {
+    dark: true,
+    kick: 'docs.rs · wry 0.57.0',
+    title: 'Struct WebViewBuilder',
+    paras: [
+      'Builds a WebView. Configure the page, scripts and handlers on the builder, then attach it to a window with {L0}, or as a child of an existing window with build_as_child.',
+      'Initialization scripts run before any page script, in every frame on Windows. Use them for polyfills and for intercepting calls the page should not make.',
+      'See also {L1} for per-platform options such as additional browser arguments and the scroll bar style.'
+    ],
+    links: [
+      { text: 'build', url: 'https://docs.rs/wry/latest/wry/struct.WebViewBuilder.html#method.build' },
+      { text: 'WebViewBuilderExtWindows', url: 'https://docs.rs/wry/latest/wry/trait.WebViewBuilderExtWindows.html' }
+    ]
+  },
+  mail: { kick: 'mail.example', title: 'Inbox · 3 unread', paras: ['Orbital mechanics reading group moved to Thursday.', 'Your parcel is out for delivery. {L0}', 'Invoice 2026-114 is ready.'], links: [{ text: 'Track parcel', url: 'https://track.parcel.example/p/88213?mc_cid=a91&mc_eid=f0', clean: 'https://track.parcel.example/p/88213', removed: ['mc_cid', 'mc_eid'] }] },
+  radio: { dark: true, kick: 'radio.example · live', title: 'Night shift, deep ambient', paras: ['Now playing: long-form drones until 04:00.', 'Listeners: 1,204.'], links: [] }
+};
+
+function baseTabs() {
+  return [
+    { title: 'Inbox (3)', host: 'mail.example', url: 'https://mail.example/inbox', art: 'mail', pinned: true, blocked: 4, wv: true },
+    { title: "Why the rings are ice", host: 'ring-dynamics.example', url: 'https://ring-dynamics.example/notes/ice-purity', art: 'rings', blocked: 42, wv: true },
+    { title: 'WebViewBuilder in wry', host: 'docs.rs', url: 'https://docs.rs/wry/latest/wry/struct.WebViewBuilder.html', art: 'wry', blocked: 0, wv: true },
+    { title: 'Night shift', host: 'radio.example', url: 'https://radio.example/live', art: 'radio', audio: true, blocked: 17, trimmed: false, wv: true },
+    { title: 'news.example', host: 'news.example', url: 'https://news.example/world', art: 'rings', loading: true, blocked: 6, wv: true }
+  ];
+}
+
+var HISTORY = [
+  { day: 'today', items: [
+    ['22:41', "Why the rings are ice", 'ring-dynamics.example/notes/ice-purity'],
+    ['22:30', 'WebViewBuilder in wry', 'docs.rs/wry/latest/wry'],
+    ['21:58', 'Night shift', 'radio.example/live'],
+    ['21:12', 'Hyprland wiki: window rules', 'wiki.hypr.land/Configuring/Window-Rules'],
+    ['20:47', 'Orrery-dotfiles', 'github.com/thomasmartinoa/Orrery-dotfiles']
+  ] },
+  { day: 'yesterday', items: [
+    ['23:05', 'Slint language reference', 'docs.slint.dev/latest/docs/slint'],
+    ['19:40', 'Inbox (3)', 'mail.example/inbox'],
+    ['18:22', 'WebView2 release notes', 'learn.microsoft.com/microsoft-edge/webview2'],
+    ['09:15', 'Cassini grand finale', 'archive.ring-dynamics.example/cassini']
+  ] },
+  { day: 'monday 9 nov', items: [
+    ['22:11', 'EasyPrivacy list', 'easylist.to/easylist/easyprivacy.txt'],
+    ['14:03', 'Catppuccin palette', 'catppuccin.com/palette']
+  ] }
+];
+
+var LOG = [
+  ['T', 'www.google-analytics.com /g/collect · ping'],
+  ['T', 'securepubads.g.doubleclick.net /gampad/ads · script'],
+  ['R', 'window.gtag → no-op'],
+  ['B', 'ring-dynamics.example /beacon (payload scrambled)'],
+  ['T', 'connect.facebook.net /en_US/fbevents.js · script'],
+  ['R', 'navigator.sendBeacon → faked true'],
+  ['P', 'utm_source, utm_medium stripped'],
+  ['T', 'static.hotjar.com /c/hotjar.js · script'],
+  ['T', 'cdn.segment.com /analytics.js · script'],
+  ['R', 'fetch → api.mixpanel.com /track → 204'],
+  ['T', 'bat.bing.com /bat.js · script'],
+  ['T', 'c.clarity.ms /c.gif · pixel'],
+  ['N', 'adclick.example page refused']
+];
+
+// ---------------------------------------------------------------- state
+var theme = (function () {
+  try { var t = localStorage.getItem('brx-spec-theme'); if (t && PAL[t]) return t; } catch (e) {}
+  return (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'zenith' : 'eclipse';
+})();
+
+function fresh() {
+  return {
+    focused: true, max: false, fs: false, reveal: false, narrow: false, eph: false, minimized: false, closed: false,
+    tabs: baseTabs(), active: 1, closedTabs: [{ title: 'Slint language reference', url: 'https://docs.slint.dev/latest/docs/slint', host: 'docs.slint.dev', art: 'wry' }],
+    addrFocus: false, addrText: '', sel: 0,
+    pop: null, hover: null, panel: null, find: null, perm: null, toast: null, palette: null,
+    zoom: 100, shieldOn: true, paused: {}, dl: null, overflow: 0, settingsSec: 'appearance', histQ: '', bellQuiet: false
+  };
+}
+var S = fresh();
+var current = 'titlebar';
+
+// --------------------------------------------------------------- helpers
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function tab() { return S.tabs[S.active]; }
+function isInternal(t) { return /^brx:/.test(t.url || ''); }
+function hostOf(u) { var m = /^[a-z]+:\/\/([^/?#]+)/i.exec(u || ''); return m ? m[1] : ''; }
+function group(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function P() { return PAL[theme]; }
+
+var TRACK = ['utm_', 'fbclid', 'gclid', 'msclkid', 'mc_cid', 'mc_eid', '_ga', '_gl', 'igshid', 'ttclid', 'yclid', 'mkt_tok'];
+function cleanUrl(u) {
+  var q = u.indexOf('?'); if (q < 0) return null;
+  var hashI = u.indexOf('#'); var frag = hashI > q ? u.slice(hashI) : '';
+  var base = u.slice(0, q), query = u.slice(q + 1, hashI > q ? hashI : undefined);
+  var kept = [], removed = [];
+  query.split('&').forEach(function (p) {
+    var k = p.split('=')[0].toLowerCase();
+    if (TRACK.some(function (t) { return t.slice(-1) === '_' ? k.indexOf(t) === 0 : k === t; })) removed.push(k); else if (p) kept.push(p);
+  });
+  if (!removed.length) return null;
+  return { url: base + (kept.length ? '?' + kept.join('&') : '') + frag, removed: removed };
+}
+function resolve(input) {
+  var s = input.trim(); if (!s) return null;
+  if (/^[a-z]+:\/\//i.test(s) || /^brx:/.test(s)) return s;
+  var first = s.split(/[/?#]/)[0];
+  if (!/\s/.test(s) && /\.[a-z]{2,}$/i.test(first.split(':')[0])) return 'https://' + s;
+  return 'https://duckduckgo.com/?q=' + encodeURIComponent(s);
+}
+
+// ------------------------------------------------------------ rendering
+var win = document.getElementById('win');
+
+function applyTheme() {
+  var p = P(), r = document.documentElement;
+  ['b0', 'b1', 'b2', 'b3', 'b4', 'fg', 'acc', 'mid', 'dim', 'ok', 'info', 'warn', 'bad', 'crit', 'xbg', 'xfg'].forEach(function (k) { r.style.setProperty('--' + k, p[k]); });
+  r.setAttribute('data-theme', p.dark ? 'dark' : 'light');
+  r.style.colorScheme = p.dark ? 'dark' : 'light';
+  try { localStorage.setItem('brx-spec-theme', theme); } catch (e) {}
+  var box = document.getElementById('themes');
+  box.innerHTML = ORDER.map(function (k) {
+    var q = PAL[k];
+    return '<button type="button" data-theme-pick="' + k + '" aria-pressed="' + (k === theme) + '"><i style="background:' + q.acc + ';border-color:' + q.b3 + '"></i>' + q.name + '</button>';
+  }).join('');
+}
+
+function tabLabel(t, i, on) {
+  var n = i + 1;
+  if (!on) return String(n);
+  var name = t.title || (t.url ? hostOf(t.url) : 'empty');
+  var max = S.narrow ? 10 : 24;
+  if (name.length > max) name = name.slice(0, max - 1) + '…';
+  return n + ' ' + esc(name);
+}
+
+function renderTabs() {
+  var out = [], tabs = S.tabs, start = 0, end = tabs.length;
+  if (S.overflow) { start = S.overflow; end = Math.min(tabs.length, start + 12); }
+  if (S.overflow) out.push('<button class="cell mute" data-act="ovl" aria-label="Scroll tabs left" style="border-right:1px solid var(--b3)">‹ ' + start + '</button>');
+  for (var i = start; i < end; i++) {
+    var t = tabs[i], on = i === S.active;
+    var cls = 'tab' + (on ? ' on' : '') + (t.pinned ? ' pin' : '') + (t.trimmed && !on ? ' trim' : '') + (t.crashed ? ' crash' : '');
+    var snd = t.audio ? '<span class="snd" data-act="mute" data-i="' + i + '" title="' + (t.muted ? 'Unmute' : 'Mute') + ' tab">' + (t.muted ? I.muted : I.snd) + '</span>' : '';
+    var x = '<span class="x" data-act="tabclose" data-i="' + i + '" title="Close tab">' + I.x + '</span>';
+    out.push('<button class="' + cls + '" data-act="tab" data-i="' + i + '" draggable="true" aria-label="Tab ' + (i + 1) + ': ' + esc(t.title || 'empty') + (on ? ' (active)' : '') + '">' + tabLabel(t, i, on) + snd + (t.loading ? '<i class="ld"></i>' : '') + x + '</button>');
+    if (t.pinned && tabs[i + 1] && !tabs[i + 1].pinned) out.push('<span class="rule" aria-hidden="true"></span>');
+  }
+  if (S.overflow && end < tabs.length) out.push('<button class="cell mute" data-act="ovr" aria-label="Scroll tabs right" style="border-right:1px solid var(--b3)">' + (tabs.length - end) + ' ›</button>');
+  out.push('<button class="cell mute" data-act="newtab" aria-label="New tab" style="border-right:1px solid var(--b3)">+</button>');
+  return out.join('');
+}
+
+function renderAddr() {
+  var t = tab();
+  if (S.addrFocus) {
+    return '<div class="addr focus"><span class="gt">&gt;</span><label for="addr-in" class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Address</label><input id="addr-in" autocomplete="off" spellcheck="false" value="' + esc(S.addrText) + '"></div>';
+  }
+  var sec = '', cls = '';
+  if (!t.url) { sec = ''; }
+  else if (t.blockedNav) { sec = 'blocked'; cls = 'blk'; }
+  else if (isInternal(t)) { sec = 'brx'; cls = 'brx'; }
+  else if (/^http:/.test(t.url)) { sec = 'http'; cls = 'http'; }
+  else if (t.certErr) { sec = 'cert'; cls = 'blk'; }
+  else { sec = 'tls'; }
+  var body;
+  if (!t.url) body = '<span class="plh">url or search</span>';
+  else if (isInternal(t)) body = '<b>' + esc(t.url) + '</b>';
+  else {
+    var h = hostOf(t.url), rest = t.url.slice(t.url.indexOf(h) + h.length);
+    if (S.narrow) rest = '';
+    body = '<b>' + esc(h) + '</b><span>' + esc(rest) + '</span>';
+  }
+  return '<div class="addr">' + (sec ? '<button class="sec ' + cls + '" data-act="siteinfo" title="Site info">' + sec + '</button>' : '<span style="width:12px"></span>') +
+    '<button class="url" data-act="addrfocus" aria-label="Address: ' + esc(t.url || 'empty') + '">' + body + '</button>' +
+    (S.bellQuiet && t.host === 'ring-dynamics.example' ? '<button class="bell" data-act="siteinfo" title="Notifications blocked quietly">' + I.bell + '</button>' : '') + '</div>';
+}
+
+function renderBar() {
+  var t = tab();
+  if (S.fs && !S.reveal) return '<div class="hotzone" data-hot="1"></div>';
+  var noWeb = !t.wv;
+  var right = [];
+  if (S.zoom !== 100) right.push('<button class="cell" data-act="zoomreset" title="Reset zoom (ctrl+0)" style="border-right:1px solid var(--b3)">' + S.zoom + '%</button>');
+  if (S.dl) {
+    var d = S.dl;
+    right.push('<button class="cell' + (S.panel === 'dl' ? ' on' : '') + '" data-act="dl" title="Downloads (ctrl+j)" style="border-right:1px solid var(--b3)">' + (d.done ? '<span class="chip t-ok">dl done</span>' : 'dl <b style="color:var(--acc)">' + d.pct + '%</b>') + '</button>');
+  }
+  var paused = S.paused[t.host];
+  var shieldTxt = !S.shieldOn ? '<span class="chip t-bad">shield off</span>' : paused ? '<span class="chip t-warn">paused</span>' : (S.narrow ? '' : 'shield ') + '<b style="color:var(--acc)">' + (t.blocked || 0) + '</b>';
+  right.push('<button class="cell' + (S.panel === 'shield' ? ' on' : ' mute') + '" data-act="shield" title="Shield (ctrl+b)" style="border-right:1px solid var(--b3)">' + shieldTxt + '</button>');
+  right.push('<button class="cell' + (S.pop && S.pop.type === 'main' ? ' on' : '') + '" data-act="mainmenu" aria-label="Menu" title="Menu">' + I.menu + '</button>');
+  var prog = t.loading ? '<i class="progress" style="width:' + (t.progress || 35) + '%"></i>' : '';
+  return '<div class="bar">' +
+    (S.eph ? '<span class="eph-tag" title="Ephemeral window: nothing is saved">eph</span>' : '') +
+    '<div class="cells" role="tablist" aria-label="Tabs">' + renderTabs() + '</div>' +
+    '<div class="drag" data-drag="1" title=""></div>' +
+    '<div class="center">' +
+      '<button class="cell" data-act="back" aria-label="Back" ' + (noWeb || t.noBack ? 'disabled' : '') + '>' + I.back + '</button>' +
+      '<button class="cell" data-act="fwd" aria-label="Forward" disabled>' + I.fwd + '</button>' +
+      '<button class="cell" data-act="reload" aria-label="' + (t.loading ? 'Stop' : 'Reload') + '" ' + (noWeb ? 'disabled' : '') + ' style="border-right:1px solid var(--b3)">' + (t.loading ? I.stop : I.reload) + '</button>' +
+      renderAddr() +
+    '</div>' +
+    '<div class="drag" data-drag="1"></div>' +
+    '<div class="cells" style="border-left:1px solid var(--b3)">' + right.join('') + '</div>' +
+    (S.wcHidden ? '' : '<div class="wc"><button data-act="wmin" aria-label="Minimize">' + I.min + '</button><button data-act="wmax" aria-label="' + (S.max ? 'Restore' : 'Maximize') + '">' + (S.max ? I.rest : I.max) + '</button><button class="close" data-act="wclose" aria-label="Close window">' + I.close + '</button></div>') +
+    prog + '</div>';
+}
+
+function suggestions() {
+  var s = S.addrText.trim(); if (!s) return { rows: [], strip: null };
+  var rows = [], strip = null, r = resolve(s);
+  var isSearch = /duckduckgo\.com\/\?q=/.test(r) && !/duckduckgo/.test(s);
+  if (s[0] === '>') {
+    return { rows: commands(s.slice(1)).slice(0, 5).map(function (c) { return { tag: 'cmd', text: c.label, note: c.key || '', run: c.run }; }), strip: null };
+  }
+  if (!isSearch) {
+    var c = cleanUrl(r);
+    if (c) { strip = c.removed; rows.push({ tag: 'go', text: c.url, note: 'enter', target: c.url }); }
+    else rows.push({ tag: 'go', text: r, note: 'enter', target: r });
+  }
+  var needle = s.toLowerCase();
+  S.tabs.forEach(function (t, i) {
+    if (i !== S.active && rows.length < 5 && t.url && (t.title.toLowerCase().indexOf(needle) >= 0 || t.url.toLowerCase().indexOf(needle) >= 0))
+      rows.push({ tag: 'tab', text: (i + 1) + '  ' + t.title + '  — ' + t.host, note: 'switch', tab: i });
+  });
+  HISTORY.forEach(function (g) { g.items.forEach(function (h) {
+    if (rows.length < 6 && (h[1].toLowerCase().indexOf(needle) >= 0 || h[2].toLowerCase().indexOf(needle) >= 0))
+      rows.push({ tag: 'hist', text: h[2] + '  — ' + h[1], note: g.day, target: 'https://' + h[2] });
+  }); });
+  rows.push({ tag: 'find', text: 'search “' + s + '”', note: 'duckduckgo.com', target: 'https://duckduckgo.com/?q=' + encodeURIComponent(s) });
+  return { rows: rows, strip: strip };
+}
+
+function renderStrips() {
+  var out = '';
+  if (S.perm) {
+    out += '<div class="strip" role="alert"><span class="tag"><span class="chip t-info">ask</span></span><span class="grow"><b>' + esc(S.perm.host) + '</b> wants to use your ' + esc(S.perm.what) + '</span>' +
+      '<button class="btn t-bad" data-act="perm" data-v="block">block</button><button class="btn" data-act="perm" data-v="once">allow once</button><button class="btn fill t-ok" data-act="perm" data-v="allow">allow</button></div>';
+  }
+  if (S.addrFocus) {
+    var sg = suggestions();
+    S._sugg = sg.rows;
+    if (S.sel >= sg.rows.length) S.sel = Math.max(0, sg.rows.length - 1);
+    sg.rows.forEach(function (r, i) {
+      out += '<div class="strip hov' + (i === S.sel ? ' sel' : '') + '" data-act="sugg" data-i="' + i + '"><span class="tag">' + r.tag + '</span><span class="grow">' + esc(r.text) + '</span><span class="note">' + esc(r.note) + '</span></div>';
+    });
+    if (sg.strip) out += '<div class="strip"><span class="tag acc">strip</span><span class="grow"><s>' + sg.strip.map(esc).join('</s>  <s>') + '</s></span><span class="note">' + sg.strip.length + ' param' + (sg.strip.length > 1 ? 's' : '') + '</span></div>';
+  }
+  return out;
+}
+
+function articleHTML(a, findQ) {
+  var cur = 0, total = 0;
+  function mark(text) {
+    var safe = esc(text);
+    if (!findQ) return safe;
+    var re = new RegExp(findQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), S.find && S.find.cs ? 'g' : 'gi');
+    return safe.replace(re, function (m) { total++; return '<mark class="' + (total === (S.find.idx || 1) ? 'cur' : '') + '">' + m + '</mark>'; });
+  }
+  var html = '<div class="kick">' + mark(a.kick) + '</div><h1>' + mark(a.title) + '</h1>' + a.paras.map(function (p) {
+    var parts = p.split(/\{L(\d)\}/), o = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) o += mark(parts[i]);
+      else { var L = a.links[+parts[i]]; o += '<a href="#" data-link="' + parts[i] + '">' + mark(L.text) + '</a>'; }
+    }
+    return '<p>' + o + '</p>';
+  }).join('');
+  if (S.find) S.find.total = total;
+  return html;
+}
+
+function renderPage() {
+  var t = tab();
+  if (t.closedPage) return '';
+  if (!t.wv && !t.url) return emptyPage();
+  if (t.page === 'history') return historyPage();
+  if (t.page === 'settings') return settingsPage();
+  if (t.blockedNav) return endPage('blocked · ' + esc(t.host), 'navigation layer · rule ' + esc(t.host) + ' · tracker host on the built-in list', [['go back', 'back'], ['allow this site', 'allowsite']], 'Add <span style="color:var(--acc)">@@||' + esc(t.host) + '^</span> to filters.txt to allow it permanently.', ['refused by shield', 'bad']);
+  if (t.offline) return endPage("can't reach " + esc(t.host), 'dns lookup failed · ERR_NAME_NOT_RESOLVED · no network on this machine', [['retry', 'retry'], ['network settings', 'noop']], 'brxswer retries on its own when the connection comes back.', ['offline', 'warn']);
+  if (t.certErr) return endPage('connection not private · ' + esc(t.host), 'certificate expired 3 days ago (2026-11-10) · issued by R11 · anyone on the network could read this page', [['go back', 'back'], ['details', 'noop']], 'There is no "proceed anyway" button on expired or mismatched certificates. Type the URL with <span style="color:var(--acc)">!</span> in front to override once.', ['not private', 'bad']);
+  if (t.crashed) return endPage('tab ' + (S.active + 1) + ' stopped', 'the page process ended (out of memory) · nothing was lost from other tabs', [['reload', 'revive'], ['close tab', 'closethis']], 'The tab keeps its history; reload restores where you were.', ['crashed', 'bad']);
+  var a = ARTICLES[t.art] || ARTICLES.rings;
+  if (t.loading) return '<div class="site"><div class="kick" style="color:#9b9b9b">loading ' + esc(t.host) + '</div><div class="sk" style="width:50%;height:26px;margin-top:16px"></div><div class="sk"></div><div class="sk"></div><div class="sk" style="width:70%"></div></div>';
+  return '<div class="site' + (a.dark ? ' dark' : '') + '" style="font-size:' + (15 * S.zoom / 100) + 'px">' + articleHTML(a, S.find && S.find.q) + '</div>';
+}
+
+function endPage(title, line, acts, note, tag) {
+  return '<div class="ipage"><div class="iend">' + (tag ? '<div><span class="chip t-' + tag[1] + '">' + tag[0] + '</span></div>' : '') + '<div class="t">' + title + '</div><div class="muted">' + line + '</div>' +
+    (note ? '<div class="muted">' + note + '</div>' : '') +
+    '<div class="acts">' + acts.map(function (a, i) { return '<button class="btn' + (i === 0 ? ' pri' : '') + '" data-act="' + a[1] + '">' + a[0] + '</button>'; }).join('') + '</div></div></div>';
+}
+
+function emptyPage() {
+  var closed = S.closedTabs.slice(0, 5);
+  return '<div class="ipage"><div class="keymap">' +
+    '<div><h4>go</h4><span class="k">ctrl+l</span><span>address</span><span class="k">ctrl+k</span><span>commands</span><span class="k">ctrl+t</span><span>new tab</span><span class="k">ctrl+w</span><span>close tab</span><span class="k">ctrl+1..9</span><span>jump to tab</span></div>' +
+    '<div><h4>see</h4><span class="k">ctrl+f</span><span>find in page</span><span class="k">ctrl+b</span><span>shield</span><span class="k">ctrl+j</span><span>downloads</span><span class="k">ctrl+h</span><span>history</span><span class="k">alt+t</span><span>next theme</span></div>' +
+    '<div><h4>' + (S.eph ? 'ephemeral' : 'recently closed') + '</h4>' + (S.eph ? '<span style="grid-column:1/-1" class="muted">nothing from this window is written to disk. closing it erases cookies, cache and history.</span>' :
+      closed.map(function (c, i) { return '<span class="k">' + (i === 0 ? 'ctrl+shift+t' : '') + '</span><button data-act="reopen" data-i="' + i + '">' + esc(c.title) + '</button>'; }).join('')) + '</div>' +
+    '</div></div>';
+}
+
+function historyPage() {
+  var q = S.histQ.toLowerCase();
+  var body = HISTORY.map(function (g) {
+    var items = g.items.filter(function (h) { return !q || h[1].toLowerCase().indexOf(q) >= 0 || h[2].toLowerCase().indexOf(q) >= 0; });
+    if (!items.length) return '';
+    return '<div class="day">' + g.day + '</div>' + items.map(function (h) {
+      return '<div class="hr"><span class="muted">' + h[0] + '</span><button class="ti" style="text-align:left" data-act="go" data-url="https://' + esc(h[2]) + '">' + esc(h[1]) + '</button><span class="ho">' + esc(h[2]) + '</span><button class="del" data-act="noop" aria-label="Remove from history">' + I.x + '</button></div>';
+    }).join('');
+  }).join('');
+  return '<div class="ipage"><div class="hist"><div class="hs"><label for="hist-in" class="cell mute" style="border-left:0">search</label><input id="hist-in" value="' + esc(S.histQ) + '" placeholder="title or address" autocomplete="off"><button class="cell" data-act="noop">clear range…</button><button class="cell" data-act="noop">export</button></div><div class="list">' + (body || '<div class="day">nothing matches “' + esc(S.histQ) + '”</div>') + '</div></div></div>';
+}
+
+var LTONE = { T: 'bad', N: 'bad', R: 'info', B: 'warn', P: 'ok' };
+var TONES = { allow: 'ok', ask: 'info', block: 'bad', on: 'ok', off: 'bad', paused: 'warn' };
+// tones: true = each word's default meaning, or an explicit {option: tone} map
+function seg(name, opts, val, tones) {
+  return '<div class="seg" role="group" aria-label="' + esc(name) + '">' + opts.map(function (o) {
+    var tone = tones === true ? TONES[o] : tones && tones[o];
+    return '<button' + (tone ? ' class="t-' + tone + '"' : '') + ' data-act="setopt" data-k="' + esc(name) + '" data-v="' + esc(o) + '" aria-pressed="' + (o === val) + '">' + esc(o) + '</button>';
+  }).join('') + '</div>';
+}
+var OPTS = { density: 'compact', restore: 'last session', search: 'duckduckgo', beacons: 'scramble', thirdparty: 'block', clearexit: 'off', decorations: 'auto', tabclose: 'neighbour', autoplay: 'block', https: 'upgrade', cam: 'ask', loc: 'block', not: 'block', mic: 'allow' };
+function settingsPage() {
+  var sec = S.settingsSec, c = '';
+  if (sec === 'appearance') {
+    c = '<h4>APPEARANCE</h4>' +
+      '<div class="sr"><span>theme</span><div class="sw" role="group" aria-label="Theme">' + ORDER.map(function (k) { var q = PAL[k]; return '<button data-theme-pick="' + k + '" aria-pressed="' + (k === theme) + '"><span>' + [q.b0, q.b2, q.mid, q.acc].map(function (cc) { return '<i style="background:' + cc + '"></i>'; }).join('') + '</span>' + q.name + '</button>'; }).join('') + '</div></div>' +
+      '<div class="sr"><span>follow orrery</span>' + seg('orrery', ['on', 'off'], 'on') + '<span class="d">reads ~/.config/orrery/current and switches with orrery-theme</span></div>' +
+      '<div class="sr"><span>ui font</span><input class="tin" id="set-font" value="Consolas"></div>' +
+      '<div class="sr"><span>density</span>' + seg('density', ['compact', 'roomy'], OPTS.density) + '<span class="d">compact = 32px bar · roomy = 40px bar, larger hit areas</span></div>' +
+      '<div class="sr"><span>window controls</span>' + seg('decorations', ['auto', 'always', 'never'], OPTS.decorations) + '<span class="d">auto hides them under tiling compositors (Hyprland, Sway)</span></div>';
+  } else if (sec === 'search') {
+    c = '<h4>SEARCH &amp; START</h4>' +
+      '<div class="sr"><span>search engine</span>' + seg('search', ['duckduckgo', 'startpage', 'brave', 'custom'], OPTS.search) + '</div>' +
+      '<div class="sr"><span>custom url</span><input class="tin" id="set-search" value="https://duckduckgo.com/?q=%s"></div>' +
+      '<div class="sr"><span>on start</span>' + seg('restore', ['empty tab', 'last session', 'home'], OPTS.restore) + '</div>' +
+      '<div class="sr"><span>closing a tab focuses</span>' + seg('tabclose', ['neighbour', 'opener', 'last used'], OPTS.tabclose) + '</div>';
+  } else if (sec === 'shield') {
+    c = '<h4>SHIELD</h4>' +
+      '<div class="sr"><span>shield</span>' + seg('shield', ['on', 'off'], S.shieldOn ? 'on' : 'off', true) + '</div>' +
+      '<div class="sr"><span>beacons to unknown hosts</span>' + seg('beacons', ['scramble', 'drop', 'allow'], OPTS.beacons) + '</div>' +
+      '<div class="sr"><span>upgrade to https</span>' + seg('https', ['upgrade', 'off'], OPTS.https) + '</div>' +
+      '<div class="sr"><span>lists</span><span class="muted">built-in (214 hosts) · easyprivacy <span class="linkish">add list url…</span></span></div>' +
+      '<div class="sr"><span>filters.txt</span><textarea class="tin" id="set-filters" spellcheck="false">||tracker.example^\n0.0.0.0 ads.example\ncdn.example/collect\n@@||clarity.ms^</textarea><span class="d">applied when you leave this field · 4 rules · 0 errors</span></div>' +
+      '<div class="sr"><span>paused sites</span><span class="muted">' + (Object.keys(S.paused).filter(function (k) { return S.paused[k]; }).join(', ') || 'none') + '</span></div>';
+  } else if (sec === 'privacy') {
+    c = '<h4>PRIVACY</h4>' +
+      '<div class="sr"><span>third-party cookies</span>' + seg('thirdparty', ['block', 'allow'], OPTS.thirdparty) + '</div>' +
+      '<div class="sr"><span>clear data on exit</span>' + seg('clearexit', ['off', 'cookies', 'everything'], OPTS.clearexit) + '</div>' +
+      '<div class="sr"><span>autoplay with sound</span>' + seg('autoplay', ['block', 'allow'], OPTS.autoplay) + '</div>' +
+      '<div class="sr"><span>site permissions</span><span class="muted">camera 1 · location 0 · notifications blocked quietly · <span class="linkish">manage</span></span></div>' +
+      '<div class="sr"><span>browsing data</span><span><button class="btn">clear…</button></span></div>';
+  } else {
+    c = '<h4>KEYS</h4>' + [['ctrl+l', 'address bar'], ['ctrl+k', 'command palette'], ['ctrl+t / ctrl+w', 'new / close tab'], ['ctrl+shift+t', 'reopen closed tab'], ['ctrl+tab', 'next tab'], ['ctrl+1..8 / ctrl+9', 'tab n / last tab'], ['ctrl+f', 'find in page'], ['ctrl+b', 'shield panel'], ['ctrl+j', 'downloads'], ['ctrl+h', 'history'], ['ctrl+,', 'settings'], ['ctrl+= / - / 0', 'zoom'], ['alt+t', 'next theme'], ['F11', 'fullscreen'], ['ctrl+shift+n', 'ephemeral window']].map(function (k) {
+      return '<div class="sr"><span style="color:var(--acc)">' + k[0] + '</span><span>' + k[1] + ' <span class="linkish" style="margin-left:12px">rebind</span></span></div>';
+    }).join('');
+  }
+  var secs = [['appearance', 'appearance'], ['search', 'search & start'], ['shield', 'shield'], ['privacy', 'privacy'], ['keys', 'keys']];
+  return '<div class="ipage"><div class="set"><nav aria-label="Settings sections">' + secs.map(function (s) { return '<button data-act="setsec" data-v="' + s[0] + '" aria-current="' + (s[0] === sec) + '">' + s[1] + '</button>'; }).join('') + '</nav><div class="sc">' + c + '</div></div></div>';
+}
+
+function renderFind() {
+  if (!S.find) return '';
+  var f = S.find, tot = f.total || 0;
+  var cnt = !f.q ? '' : tot ? (Math.min(f.idx || 1, tot)) + '/' + tot : 'no match';
+  return '<div class="find"><label for="find-in">find</label><input id="find-in" autocomplete="off" spellcheck="false" value="' + esc(f.q) + '"><span class="cnt' + (f.q && !tot ? ' none' : '') + '">' + cnt + '</span>' +
+    '<button class="cell" data-act="findprev" aria-label="Previous match">' + I.back + '</button><button class="cell" data-act="findnext" aria-label="Next match">' + I.fwd + '</button>' +
+    '<button class="cell' + (f.cs ? ' on' : '') + '" data-act="findcase" aria-pressed="' + !!f.cs + '" title="Match case">aa</button><button class="cell" data-act="findclose" aria-label="Close find">' + I.x + '</button></div>';
+}
+
+function renderPanel() {
+  var t = tab();
+  if (S.panel === 'shield') {
+    var paused = !!S.paused[t.host];
+    var counts = { T: 0, R: 0, B: 0, P: 0, N: 0 }, base = t.blocked || 0;
+    counts.T = Math.round(base * .62); counts.R = Math.round(base * .17); counts.B = Math.round(base * .1); counts.P = base - counts.T - counts.R - counts.B; counts.N = 0;
+    var names = { T: 'transport · requests dropped', R: 'runtime · calls faked', B: 'beacons scrambled', P: 'params stripped', N: 'navigations refused' };
+    return '<aside class="panel" aria-label="Shield"><div class="ph"><b>SHIELD</b>' + seg('shield', ['on', 'off'], S.shieldOn ? 'on' : 'off', true) + '</div>' +
+      '<div class="pbody"><div class="prow"><span class="g">this site · ' + esc(t.host || '—') + '</span>' + seg('site', ['on', 'paused'], paused ? 'paused' : 'on', true) + '</div>' +
+      (paused ? '<div class="muted">paused: requests below were seen, not blocked</div>' : '') +
+      Object.keys(names).map(function (k) { return '<div class="prow"><span class="k t-' + LTONE[k] + '">' + k + '</span><span class="g">' + (paused ? names[k].replace('dropped', 'seen').replace('faked', 'seen').replace('scrambled', 'seen').replace('stripped', 'seen').replace('refused', 'seen') : names[k]) + '</span><span class="n">' + counts[k] + '</span></div>'; }).join('') +
+      '</div><div class="muted" style="padding:10px 12px 6px">recent</div><div class="log">' + (base ? LOG.slice(0, Math.min(LOG.length, 13)).map(function (l) { return '<div><span class="k t-' + LTONE[l[0]] + '">' + l[0] + '</span><span>' + esc(l[1]) + '</span></div>'; }).join('') : '<div><span></span><span class="muted">nothing blocked on this page</span></div>') + '</div>' +
+      '<div class="pfoot"><span>session 2,904</span><button data-act="filters">edit filters</button></div></aside>';
+  }
+  if (S.panel === 'dl') {
+    var items = [
+      { n: 'cassini-vims-cube-2017-09.fits', s: S.dl && !S.dl.done ? '312 / 840 MB · 6.1 MB/s · 1 min left' : '840 MB · 22:52', pct: S.dl ? (S.dl.done ? 100 : S.dl.pct) : 100, act: S.dl && !S.dl.done ? ['pause', 'cancel'] : ['open', 'show in folder'] },
+      { n: 'brxswer-0.3.0-x86_64.msi', s: '7.9 MB · 21:30', pct: 100, act: ['open', 'show in folder'] },
+      { n: 'ring-particle-sizes.pdf', s: 'failed · server closed the connection', pct: 41, act: ['retry', 'remove'], fail: true },
+      { n: 'orrery-wallpapers.zip', s: '64 MB · yesterday', pct: 100, act: ['open', 'show in folder'] }
+    ];
+    return '<aside class="panel" aria-label="Downloads"><div class="ph"><b>DOWNLOADS</b><button class="muted" data-act="noop">clear finished</button></div>' +
+      items.map(function (d) { return '<div class="dl' + (d.fail ? ' fail' : '') + '"><div class="top2"><b>' + esc(d.n) + '</b></div><div class="bar1"><i style="width:' + d.pct + '%' + (d.fail ? ';background:var(--bad)' : d.pct === 100 ? ';background:var(--ok)' : '') + '"></i></div><div class="top2"><span class="muted st">' + esc(d.s) + '</span><span class="acts">' + d.act.map(function (a) { return '<button data-act="noop">' + a + '</button>'; }).join('') + '</span></div></div>'; }).join('') +
+      '<div style="flex:1"></div><div class="pfoot"><span>saving to ~/Downloads</span><button data-act="noop">change</button></div></aside>';
+  }
+  return '';
+}
+
+function renderFoot() {
+  var t = tab();
+  if (S.addrFocus && (S._sugg || []).length) return '<div class="foot"><span>enter go    alt+enter new tab    up/down pick    tab complete    shift+del forget    esc back</span><span></span></div>';
+  if (!t.wv && !t.url) return '<div class="foot"><span>session · 2,904 blocked · 61 params stripped · 140 beacons faked</span><span>' + S.tabs.length + ' tabs · ' + S.tabs.filter(function (x, i) { return x.trimmed && i !== S.active; }).length + ' trimmed</span></div>';
+  return '';
+}
+
+function menuHTML(items) {
+  return items.map(function (m) {
+    if (m === '-') return '<div class="sep" role="separator"></div>';
+    if (m.row === 'zoom') return '<div class="mrow"><span class="grow">zoom</span><div class="seg"><button data-act="zoomout" aria-label="Zoom out">−</button><button data-act="zoomreset">' + S.zoom + '%</button><button data-act="zoomin" aria-label="Zoom in">+</button></div></div>';
+    if (m.row === 'theme') return '<div class="mrow"><span class="grow">theme</span><div class="sws">' + ORDER.map(function (k) { return '<button data-theme-pick="' + k + '" aria-pressed="' + (k === theme) + '" title="' + PAL[k].title + '"><i style="background:' + PAL[k].acc + ';outline:1px solid ' + PAL[k].b3 + '"></i></button>'; }).join('') + '</div></div>';
+    return '<button class="mi" role="menuitem" data-act="' + m.act + '"' + (m.i != null ? ' data-i="' + m.i + '"' : '') + (m.dis ? ' disabled' : '') + '><span>' + esc(m.label) + '</span>' + (m.key ? '<span class="k">' + esc(m.key) + '</span>' : '') + '</button>';
+  }).join('');
+}
+
+function renderPop() {
+  var p = S.pop; if (!p) return '';
+  var t = tab();
+  if (p.type === 'main') {
+    return '<div class="pop" role="menu" style="right:139px;top:32px;width:280px">' + menuHTML([
+      { label: 'new tab', key: 'ctrl+t', act: 'newtab' }, { label: 'new ephemeral window', key: 'ctrl+shift+n', act: 'ephwin' }, { label: 'reopen closed tab', key: 'ctrl+shift+t', act: 'reopen', i: 0 }, '-',
+      { label: 'command palette', key: 'ctrl+k', act: 'palette' }, { label: 'find in page', key: 'ctrl+f', act: 'find' }, { label: 'history', key: 'ctrl+h', act: 'history' }, { label: 'downloads', key: 'ctrl+j', act: 'dl' }, '-',
+      { row: 'zoom' }, { row: 'theme' }, '-',
+      { label: 'settings', key: 'ctrl+,', act: 'settings' }, { label: 'shield', key: 'ctrl+b', act: 'shield' }, '-', { label: 'quit', key: 'ctrl+q', act: 'wclose' }
+    ]) + '</div>';
+  }
+  if (p.type === 'tab') {
+    var tt = S.tabs[p.i];
+    return '<div class="pop" role="menu" style="left:' + p.x + 'px;top:' + p.y + 'px;width:250px">' + menuHTML([
+      { label: 'reload', key: 'ctrl+r', act: 'noop' }, { label: 'duplicate', act: 'dup', i: p.i }, { label: tt.pinned ? 'unpin' : 'pin', act: 'pin', i: p.i }, { label: tt.muted ? 'unmute' : 'mute', key: 'ctrl+m', act: 'mute', i: p.i, dis: !tt.audio },
+      { label: 'copy clean link', act: 'copylink', i: p.i }, '-', { label: 'move to new window', act: 'noop' }, '-',
+      { label: 'close', key: 'ctrl+w', act: 'tabclose', i: p.i, dis: tt.pinned }, { label: 'close other tabs', act: 'closeothers', i: p.i }, { label: 'close tabs to the right', act: 'closeright', i: p.i }, '-', { label: 'reopen closed tab', key: 'ctrl+shift+t', act: 'reopen', i: 0 }
+    ]) + '</div>';
+  }
+  if (p.type === 'page') {
+    var L = p.link;
+    var items = L ? [
+      { label: 'open link in new tab', act: 'openbg', i: p.li }, { label: 'open link in ephemeral window', act: 'noop' }, '-',
+      { label: L.clean ? 'copy clean link  (strips ' + L.removed.length + ')' : 'copy link', act: 'copylink' }, L.clean ? { label: 'copy link as-is', act: 'copyraw' } : null, '-',
+      { label: 'inspect', key: 'ctrl+shift+i', act: 'noop' }
+    ].filter(Boolean) : [
+      { label: 'back', key: 'alt+left', act: 'back' }, { label: 'forward', key: 'alt+right', act: 'noop', dis: true }, { label: 'reload', key: 'ctrl+r', act: 'noop' }, '-',
+      { label: 'find on page', key: 'ctrl+f', act: 'find' }, { label: 'copy clean page link', act: 'copylink' }, { label: 'save page as…', key: 'ctrl+s', act: 'noop' }, '-',
+      { label: 'view source', key: 'ctrl+u', act: 'noop' }, { label: 'inspect', key: 'ctrl+shift+i', act: 'noop' }
+    ];
+    return '<div class="pop" role="menu" style="left:' + p.x + 'px;top:' + p.y + 'px;width:290px">' + menuHTML(items) + '</div>';
+  }
+  if (p.type === 'site') {
+    var paused = !!S.paused[t.host];
+    return '<div class="pop site-info" role="dialog" aria-label="Site info" style="left:' + (S.narrow ? 70 : 370) + 'px;top:32px">' +
+      '<div class="sh"><div class="line"><b>' + esc(t.host) + '</b>' + (t.certErr ? '<span class="chip t-bad">not private</span>' : /^http:/.test(t.url) ? '<span class="chip t-warn">not encrypted</span>' : '<span class="chip t-ok">secure</span>') + '</div><span class="muted">' + (t.certErr ? 'certificate expired · connection not private' : /^http:/.test(t.url) ? 'not encrypted · anyone on the network can read this page' : 'tls 1.3 · certificate valid until 2027-01-20 · R11') + '</span></div>' +
+      '<div class="sb"><div class="line"><span>shield on this site</span>' + seg('site', ['on', 'paused'], paused ? 'paused' : 'on', true) + '</div><div class="line"><span class="muted">' + (t.blocked || 0) + ' blocked on this page</span><span class="linkish" data-act="shield">details</span></div></div>' +
+      '<div class="sb"><div class="line"><span>camera</span>' + seg('cam', ['ask', 'allow', 'block'], OPTS.cam, true) + '</div><div class="line"><span>microphone</span>' + seg('mic', ['ask', 'allow', 'block'], OPTS.mic, true) + '</div><div class="line"><span>location</span>' + seg('loc', ['ask', 'allow', 'block'], OPTS.loc, true) + '</div><div class="line"><span>notifications</span>' + seg('not', ['ask', 'allow', 'block'], OPTS.not, true) + '</div></div>' +
+      '<div class="sb"><div class="line"><span class="muted">4 cookies · 2 third-party blocked · 1.2 MB stored</span><button class="btn" data-act="noop">clear site data</button></div></div></div>';
+  }
+  return '';
+}
+
+function hoverHTML() {
+  var h = S.hover; if (!h) return '';
+  if (h.kind === 'tab') {
+    var t = S.tabs[h.i]; if (!t) return '';
+    var state = [t.blocked + ' blocked'];
+    if (t.audio) state.push(t.muted ? 'muted' : 'playing audio');
+    if (t.trimmed) state.push('trimmed 4 min ago');
+    if (t.loading) state.push('loading');
+    if (t.pinned) state.push('pinned');
+    return '<div class="tip" style="left:' + h.x + 'px;top:34px"><b>' + esc(t.title || 'empty tab') + '</b><span class="muted">' + esc(t.url || 'no page') + '</span><span class="muted">' + state.join(' · ') + '</span></div>';
+  }
+  if (h.kind === 'link') {
+    var a = ARTICLES[tab().art] || ARTICLES.rings, L = a.links[h.li]; if (!L) return '';
+    var top = (S.find ? 29 : 0);
+    var body = L.clean ? '<span class="acc">' + esc(L.clean) + '</span>  <span style="color:var(--mid)">strips ' + L.removed.join(', ') + '</span>' : esc(L.url);
+    return '<div class="status" style="bottom:' + top + 'px">' + body + '</div>';
+  }
+  return '';
+}
+
+function renderToast() {
+  if (!S.toast) return '';
+  return '<div class="toast' + (S.toast.tone ? ' t-' + S.toast.tone : '') + '" role="status"><span>' + S.toast.text + '</span>' + (S.toast.act ? '<button data-act="' + S.toast.act + '" data-i="0">' + S.toast.label + '</button>' : '') + '</div>';
+}
+
+function commands(q) {
+  var list = [
+    { label: 'new tab', key: 'ctrl+t', run: 'newtab' }, { label: 'close tab', key: 'ctrl+w', run: 'closethis' }, { label: 'reopen closed tab', key: 'ctrl+shift+t', run: 'reopen' },
+    { label: 'find in page', key: 'ctrl+f', run: 'find' }, { label: 'shield: toggle panel', key: 'ctrl+b', run: 'shield' },
+    { label: 'shield: pause on this site', key: '', run: 'pausesite' }, { label: 'downloads', key: 'ctrl+j', run: 'dl' }, { label: 'history', key: 'ctrl+h', run: 'history' },
+    { label: 'settings', key: 'ctrl+,', run: 'settings' }, { label: 'theme: next', key: 'alt+t', run: 'nexttheme' },
+    { label: 'theme: eclipse', run: 'theme:eclipse' }, { label: 'theme: zenith', run: 'theme:zenith' }, { label: 'theme: catppuccin mocha', run: 'theme:mocha' }, { label: 'theme: cassini', run: 'theme:cassini' },
+    { label: 'zoom in', key: 'ctrl+=', run: 'zoomin' }, { label: 'zoom out', key: 'ctrl+-', run: 'zoomout' }, { label: 'fullscreen', key: 'F11', run: 'fullscreen' },
+    { label: 'copy clean link', run: 'copylink' }, { label: 'new ephemeral window', key: 'ctrl+shift+n', run: 'ephwin' }
+  ];
+  S.tabs.forEach(function (t, i) { list.push({ label: 'tab ' + (i + 1) + ' · ' + (t.title || 'empty'), key: i < 8 ? 'ctrl+' + (i + 1) : '', run: 'goto:' + i, tag: 'tab' }); });
+  q = (q || '').trim().toLowerCase();
+  if (!q) return list;
+  var words = q.split(/\s+/);
+  return list.filter(function (c) { var l = c.label.toLowerCase(); return words.every(function (w) { return l.indexOf(w) >= 0; }); });
+}
+
+function renderPalette() {
+  if (!S.palette) return '';
+  var rows = commands(S.palette.q).slice(0, 9);
+  S._pal = rows;
+  if (S.palette.sel >= rows.length) S.palette.sel = Math.max(0, rows.length - 1);
+  return '<div class="pal" role="dialog" aria-label="Command palette"><div class="pi"><span>:</span><label for="pal-in" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Command</label><input id="pal-in" autocomplete="off" spellcheck="false" placeholder="command, tab or setting" value="' + esc(S.palette.q) + '"></div>' +
+    (rows.length ? rows.map(function (c, i) { return '<button class="pr' + (i === S.palette.sel ? ' sel' : '') + '" data-act="palrun" data-i="' + i + '"><span class="tg">' + (c.tag || 'cmd') + '</span><span class="g">' + esc(c.label) + '</span><span class="k">' + esc(c.key || '') + '</span></button>'; }).join('') : '<div class="pr"><span class="tg"></span><span class="g muted">no command matches</span></div>') +
+    '<div class="pf"><span>enter run</span><span>up/down pick</span><span>esc close</span></div></div>';
+}
+
+function render() {
+  var keep = null, ae = document.activeElement;
+  if (ae && ae.tagName === 'INPUT' && win.contains(ae)) keep = { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd };
+  win.className = 'win' + (S.max ? ' max' : '') + (S.narrow ? ' narrow' : '') + (S.eph ? ' eph' : '') + (!S.focused ? ' blur' : '') + (S.fs ? ' fs' : '');
+  var t = tab();
+  win.innerHTML = renderBar() +
+    '<div class="body"' + (S.fs ? ' style="margin-top:0"' : '') + '>' + renderStrips() +
+      '<div class="row"><div class="pagecol"><div class="page" data-page="1">' + renderPage() + '</div>' + renderFind() + '</div>' + renderPanel() + '</div>' +
+      renderFoot() + '<div id="hov">' + hoverHTML() + '</div>' +
+    '</div>' + renderPop() + renderPalette() + renderToast();
+  if (S.find) { var tot = S.find.total; var c = win.querySelector('.find .cnt'); if (c && S.find.q) { c.textContent = tot ? Math.min(S.find.idx || 1, tot) + '/' + tot : 'no match'; c.className = 'cnt' + (tot ? '' : ' none'); } }
+  var dock = document.getElementById('dock');
+  if (S.minimized || S.closed) {
+    win.style.visibility = 'hidden';
+    dock.hidden = false;
+    dock.innerHTML = S.closed ? '<button type="button" data-dock="open">window closed · open brxswer (restores ' + S.tabs.length + ' tabs)</button>' : '<button type="button" data-dock="restore">brxswer · minimized · click to restore</button>';
+  } else { win.style.visibility = ''; dock.hidden = true; }
+  var want = S.palette ? 'pal-in' : S.addrFocus ? 'addr-in' : (S.find && S.find.focus) ? 'find-in' : keep && keep.id;
+  if (want) {
+    var el = document.getElementById(want);
+    if (el) {
+      el.focus({ preventScroll: true });
+      if (keep && keep.id === want) { try { el.setSelectionRange(keep.s, keep.e); } catch (e) {} }
+      else if (want === 'addr-in' && S._selectAll) { el.select(); S._selectAll = false; }
+      else { var n = el.value.length; try { el.setSelectionRange(n, n); } catch (e) {} }
+    }
+  }
+  fit();
+}
+
+function updateHover() { var el = document.getElementById('hov'); if (el) el.innerHTML = hoverHTML(); }
+
+// ----------------------------------------------------------------- scale
+function fit() {
+  var box = document.getElementById('scalebox');
+  var w = S.narrow ? 640 : 1120, h = 700, pad = 24;
+  var avail = box.clientWidth;
+  var scale = Math.min(1, (avail - pad * 2) / w);
+  if (scale < 0.2) scale = 0.2;
+  var sc = document.getElementById('scaler');
+  sc.style.transform = 'scale(' + scale + ')';
+  sc.style.left = Math.max(0, (avail - w * scale) / 2) + 'px';
+  sc.style.top = pad * Math.min(1, scale * 1.5) + 'px';
+  box.style.height = (h * scale + pad * Math.min(1, scale * 1.5) * 2) + 'px';
+}
+window.addEventListener('resize', fit);
+
+// --------------------------------------------------------------- actions
+var toastTimer = 0;
+function toast(text, act, label, tone) {
+  S.toast = { text: text, act: act, label: label, tone: tone };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { S.toast = null; render(); }, 4000);
+}
+function closePops() { S.pop = null; S.hover = null; }
+function newTab(url) {
+  var t = { title: '', host: '', url: '', blocked: 0 };
+  S.tabs.push(t); S.active = S.tabs.length - 1;
+  if (url) navigate(url); else { S.addrFocus = true; S.addrText = ''; S.sel = 0; }
+}
+function navigate(url) {
+  var t = tab();
+  if (/^brx:\/\/history/.test(url)) { Object.assign(t, { url: 'brx://history', host: 'history', title: 'history', page: 'history', wv: false, art: null, blockedNav: false, offline: false, certErr: false, crashed: false }); return; }
+  if (/^brx:\/\/settings/.test(url)) { Object.assign(t, { url: 'brx://settings', host: 'settings', title: 'settings', page: 'settings', wv: false, art: null, blockedNav: false, offline: false, certErr: false, crashed: false }); return; }
+  var c = cleanUrl(url), removed = 0;
+  if (c && S.shieldOn) { url = c.url; removed = c.removed.length; }
+  var h = hostOf(url);
+  t.url = url; t.host = h; t.page = null; t.wv = true; t.crashed = false; t.offline = false; t.certErr = false; t.blockedNav = false;
+  t.title = h.replace(/^www\./, ''); t.art = /docs\.rs/.test(h) ? 'wry' : /mail/.test(h) ? 'mail' : /radio/.test(h) ? 'radio' : 'rings';
+  t.blocked = removed + (/ring|news/.test(h) ? 38 : 9);
+  if (/adclick|doubleclick|google-analytics/.test(h)) { t.blockedNav = true; t.blocked = 1; t.title = 'blocked'; }
+  else if (/offline|nowhere/.test(h)) { t.offline = true; t.title = "can't reach " + h; }
+  else if (/expired/.test(h)) { t.certErr = true; t.title = 'not private'; }
+  else {
+    t.loading = true; t.progress = 20;
+    var id = t;
+    setTimeout(function () { id.progress = 70; render(); }, 450);
+    setTimeout(function () { id.loading = false; id.title = (ARTICLES[id.art] || ARTICLES.rings).title.slice(0, 28); render(); }, 1100);
+  }
+  if (removed) toast('stripped ' + removed + ' tracking param' + (removed > 1 ? 's' : '') + ' from the link', null, null, 'ok');
+}
+function closeTab(i) {
+  var t = S.tabs[i]; if (!t || t.pinned) return;
+  S.tabs.splice(i, 1);
+  if (t.url) S.closedTabs.unshift(t);
+  if (!S.tabs.length) { S.tabs.push({ title: '', host: '', url: '', blocked: 0 }); S.active = 0; }
+  else if (S.active >= i && S.active > 0) S.active--;
+  if (t.url) toast('closed ' + esc(t.host || t.title), 'reopen', 'reopen · ctrl+shift+t');
+}
+function setTheme(k) { theme = k; applyTheme(); }
+
+function run(act, el, ev) {
+  var i = el && el.dataset.i != null ? +el.dataset.i : null;
+  var t = tab();
+  switch (act) {
+    case 'tab': if (S.active !== i) { S.active = i; S.addrFocus = false; } S.tabs[i].trimmed = false; closePops(); break;
+    case 'tabclose': closeTab(i); closePops(); break;
+    case 'closethis': closeTab(S.active); break;
+    case 'mute': S.tabs[i].muted = !S.tabs[i].muted; closePops(); toast(S.tabs[i].muted ? 'tab ' + (i + 1) + ' muted' : 'tab ' + (i + 1) + ' unmuted'); break;
+    case 'pin': var pt = S.tabs.splice(i, 1)[0]; pt.pinned = !pt.pinned; var at = S.tabs.filter(function (x) { return x.pinned; }).length; S.tabs.splice(pt.pinned ? at : at, 0, pt); S.active = S.tabs.indexOf(pt); closePops(); break;
+    case 'dup': S.tabs.splice(i + 1, 0, Object.assign({}, S.tabs[i], { pinned: false })); S.active = i + 1; closePops(); break;
+    case 'closeothers': S.tabs = S.tabs.filter(function (x, j) { return j === i || x.pinned; }); S.active = S.tabs.indexOf(S.tabs.filter(function (x) { return !x.pinned; })[0] || S.tabs[0]); closePops(); toast('closed other tabs', 'reopen', 'reopen'); break;
+    case 'closeright': S.tabs = S.tabs.slice(0, i + 1); if (S.active > i) S.active = i; closePops(); break;
+    case 'newtab': closePops(); newTab(); break;
+    case 'reopen': var r = S.closedTabs.shift(); if (r) { S.tabs.push(Object.assign({}, r, { wv: true })); S.active = S.tabs.length - 1; } S.toast = null; closePops(); break;
+    case 'ovl': S.overflow = Math.max(1, S.overflow - 3); break;
+    case 'ovr': S.overflow = Math.min(S.tabs.length - 12, S.overflow + 3); break;
+    case 'back': if (t.blockedNav || t.offline || t.certErr) { t.blockedNav = t.offline = t.certErr = false; Object.assign(t, baseTabs()[1]); t.wv = true; } else toast('back · ' + esc(t.host)); closePops(); break;
+    case 'fwd': break;
+    case 'reload': if (t.loading) { t.loading = false; toast('stopped loading'); } else { t.loading = true; t.progress = 30; setTimeout(function () { t.loading = false; render(); }, 900); } break;
+    case 'addrfocus': S.addrFocus = true; S.addrText = t.url; S.sel = 0; S._selectAll = true; closePops(); break;
+    case 'sugg':
+      var row = (S._sugg || [])[i];
+      if (row) { S.addrFocus = false; if (row.tab != null) S.active = row.tab; else if (row.run) dispatchCmd(row.run); else navigate(row.target); }
+      break;
+    case 'siteinfo': S.pop = S.pop && S.pop.type === 'site' ? null : { type: 'site' }; break;
+    case 'shield': closePops(); S.panel = S.panel === 'shield' ? null : 'shield'; break;
+    case 'dl': closePops(); S.panel = S.panel === 'dl' ? null : 'dl'; if (S.dl && S.dl.done) S.dl = null; break;
+    case 'mainmenu': S.pop = S.pop && S.pop.type === 'main' ? null : { type: 'main' }; S.hover = null; break;
+    case 'zoomin': S.zoom = Math.min(300, S.zoom + 10); break;
+    case 'zoomout': S.zoom = Math.max(30, S.zoom - 10); break;
+    case 'zoomreset': S.zoom = 100; break;
+    case 'wmin': closePops(); S.minimized = true; break;
+    case 'wmax': S.max = !S.max; break;
+    case 'wclose': closePops(); S.closed = true; break;
+    case 'perm': var v = el.dataset.v; toast(v === 'block' ? 'camera blocked for ' + S.perm.host : v === 'once' ? 'camera allowed this time' : 'camera allowed for ' + S.perm.host + ' · change in site info', null, null, v === 'block' ? 'bad' : 'ok'); S.perm = null; break;
+    case 'setopt':
+      var k = el.dataset.k, val = el.dataset.v;
+      if (k === 'shield') { S.shieldOn = val === 'on'; }
+      else if (k === 'site') { S.paused[t.host] = val === 'paused'; }
+      else OPTS[k] = val;
+      break;
+    case 'setsec': S.settingsSec = el.dataset.v; break;
+    case 'filters': S.panel = null; closePops(); openInternal('brx://settings'); S.settingsSec = 'shield'; break;
+    case 'history': closePops(); openInternal('brx://history'); break;
+    case 'settings': closePops(); openInternal('brx://settings'); break;
+    case 'find': closePops(); S.find = S.find || { q: '', idx: 1, cs: false }; S.find.focus = true; break;
+    case 'findclose': S.find = null; break;
+    case 'findnext': if (S.find && S.find.total) S.find.idx = (S.find.idx % S.find.total) + 1; break;
+    case 'findprev': if (S.find && S.find.total) S.find.idx = ((S.find.idx - 2 + S.find.total) % S.find.total) + 1; break;
+    case 'findcase': S.find.cs = !S.find.cs; S.find.idx = 1; break;
+    case 'palette': closePops(); S.palette = { q: '', sel: 0 }; break;
+    case 'palrun': var c = (S._pal || [])[i]; S.palette = null; if (c) dispatchCmd(c.run); break;
+    case 'copylink': closePops(); var u = (S.pop && S.pop.link) || null; toast('link copied · tracking params removed'); break;
+    case 'copyraw': closePops(); toast('link copied as-is'); break;
+    case 'openbg': closePops(); var a = ARTICLES[t.art], L = a.links[i]; S.tabs.splice(S.active + 1, 0, { title: hostOf(L.clean || L.url), host: hostOf(L.url), url: L.clean || L.url, art: 'rings', blocked: 12, wv: true }); toast('opened in tab ' + (S.active + 2) + (L.clean ? ' · ' + L.removed.length + ' params stripped' : ''), 'gotonext', 'show'); break;
+    case 'gotonext': S.active = Math.min(S.tabs.length - 1, S.active + 1); S.toast = null; break;
+    case 'ephwin': closePops(); var th = theme; S = fresh(); S.eph = true; S.tabs = [{ title: '', host: '', url: '', blocked: 0 }]; S.active = 0; S.addrFocus = true; S.addrText = ''; break;
+    case 'allowsite': t.blockedNav = false; t.wv = true; t.title = t.host; toast('allowed ' + esc(t.host) + ' · added @@||' + esc(t.host) + '^ to filters.txt'); break;
+    case 'retry': t.offline = false; navigate('https://ring-dynamics.example/notes/ice-purity'); break;
+    case 'revive': t.crashed = false; t.loading = true; setTimeout(function () { t.loading = false; render(); }, 800); break;
+    case 'go': navigate(el.dataset.url); break;
+    case 'noop': closePops(); break;
+  }
+}
+function openInternal(u) {
+  var t = tab();
+  if (t.url && !isInternal(t)) { S.tabs.splice(S.active + 1, 0, { title: '', host: '', url: '', blocked: 0 }); S.active++; }
+  navigate(u);
+}
+function dispatchCmd(c) {
+  if (c.indexOf('goto:') === 0) { S.active = +c.slice(5); return; }
+  if (c.indexOf('theme:') === 0) { setTheme(c.slice(6)); return; }
+  if (c === 'nexttheme') { setTheme(ORDER[(ORDER.indexOf(theme) + 1) % 4]); return; }
+  if (c === 'fullscreen') { S.fs = !S.fs; S.reveal = false; if (S.fs) toast('F11 exits fullscreen'); return; }
+  if (c === 'pausesite') { var t = tab(); S.paused[t.host] = !S.paused[t.host]; toast((S.paused[t.host] ? 'shield paused on ' : 'shield back on for ') + esc(t.host), null, null, S.paused[t.host] ? 'warn' : 'ok'); return; }
+  run(c, { dataset: {} });
+}
+
+// ---------------------------------------------------------------- events
+win.addEventListener('click', function (ev) {
+  if (!S.focused) { S.focused = true; }
+  var el = ev.target.closest('[data-act],[data-theme-pick]');
+  if (el && el.dataset.themePick) { setTheme(el.dataset.themePick); render(); return; }
+  if (el && el.disabled) return;
+  var lk = ev.target.closest('[data-link]');
+  if (lk) {
+    ev.preventDefault();
+    var a = ARTICLES[tab().art], L = a.links[+lk.dataset.link];
+    if (ev.ctrlKey || ev.metaKey) run('openbg', { dataset: { i: lk.dataset.link } });
+    else { S.hover = null; navigate(L.url); }
+    render(); return;
+  }
+  if (!el) {
+    if (S.pop || S.palette) { closePops(); S.palette = null; render(); return; }
+    if (S.addrFocus && !ev.target.closest('.addr') && !ev.target.closest('.strip')) { S.addrFocus = false; render(); }
+    return;
+  }
+  var act = el.dataset.act;
+  if (act !== 'mainmenu' && act !== 'siteinfo' && !ev.target.closest('.pop') && S.pop) S.pop = null;
+  if (act === 'tabclose' || act === 'mute') ev.stopPropagation();
+  run(act, el, ev);
+  render();
+});
+win.addEventListener('auxclick', function (ev) {
+  if (ev.button !== 1) return;
+  var el = ev.target.closest('.tab'); if (el) { ev.preventDefault(); closeTab(+el.dataset.i); render(); }
+  var lk = ev.target.closest('[data-link]'); if (lk) { ev.preventDefault(); run('openbg', { dataset: { i: lk.dataset.link } }); render(); }
+});
+win.addEventListener('mousedown', function (ev) { if (ev.button === 1) ev.preventDefault(); });
+win.addEventListener('contextmenu', function (ev) {
+  var r = win.getBoundingClientRect(), sc = r.width / win.offsetWidth;
+  var x = (ev.clientX - r.left) / sc, y = (ev.clientY - r.top) / sc;
+  var tb = ev.target.closest('.tab'), lk = ev.target.closest('[data-link]'), pg = ev.target.closest('[data-page]');
+  if (tb) { ev.preventDefault(); S.hover = null; S.pop = { type: 'tab', i: +tb.dataset.i, x: Math.min(x, win.offsetWidth - 260), y: 32 }; render(); return; }
+  if (lk) { ev.preventDefault(); var a = ARTICLES[tab().art]; S.pop = { type: 'page', link: a.links[+lk.dataset.link], li: +lk.dataset.link, x: Math.min(x, win.offsetWidth - 300), y: Math.min(y, win.offsetHeight - 240) }; render(); return; }
+  if (pg && tab().wv) { ev.preventDefault(); S.pop = { type: 'page', x: Math.min(x, win.offsetWidth - 300), y: Math.min(y, win.offsetHeight - 300) }; render(); return; }
+  if (ev.target.closest('[data-drag]')) { ev.preventDefault(); toast('system menu: restore · move · size · minimize · maximize · close'); render(); }
+});
+win.addEventListener('dblclick', function (ev) { if (ev.target.closest('[data-drag]')) { S.max = !S.max; render(); } });
+
+var hoverTimer = 0;
+win.addEventListener('mouseover', function (ev) {
+  var tb = ev.target.closest('.tab'), lk = ev.target.closest('[data-link]');
+  if (S.pop) return;
+  if (tb) {
+    var i = +tb.dataset.i;
+    if (S.hover && S.hover.kind === 'tab' && S.hover.i === i) return;
+    clearTimeout(hoverTimer);
+    var r = win.getBoundingClientRect(), sc = r.width / win.offsetWidth, tr = tb.getBoundingClientRect();
+    var x = Math.min((tr.left - r.left) / sc, win.offsetWidth - 370);
+    hoverTimer = setTimeout(function () { S.hover = { kind: 'tab', i: i, x: x }; updateHover(); }, 450);
+    return;
+  }
+  if (lk) { var li = +lk.dataset.link; if (!(S.hover && S.hover.kind === 'link' && S.hover.li === li)) { S.hover = { kind: 'link', li: li }; updateHover(); } return; }
+  if (S.hover && !S.hover.pinned) { clearTimeout(hoverTimer); S.hover = null; updateHover(); }
+});
+win.addEventListener('mouseleave', function () { clearTimeout(hoverTimer); if (S.hover && !S.hover.pinned) { S.hover = null; updateHover(); } });
+win.addEventListener('mousemove', function (ev) {
+  if (!S.fs) return;
+  var r = win.getBoundingClientRect(), sc = r.width / win.offsetWidth, y = (ev.clientY - r.top) / sc;
+  if (!S.reveal && y < 6) { S.reveal = true; render(); }
+  else if (S.reveal && y > 60 && !S.pop) { S.reveal = false; render(); }
+});
+
+// drag to reorder
+var dragFrom = null;
+win.addEventListener('dragstart', function (ev) {
+  var tb = ev.target.closest && ev.target.closest('.tab'); if (!tb) return;
+  dragFrom = +tb.dataset.i; tb.classList.add('dragging'); S.hover = null; updateHover();
+  try { ev.dataTransfer.setData('text/plain', String(dragFrom)); ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
+});
+win.addEventListener('dragover', function (ev) {
+  var tb = ev.target.closest('.tab'); if (dragFrom == null || !tb) return;
+  ev.preventDefault();
+  win.querySelectorAll('.drop-l').forEach(function (e) { e.classList.remove('drop-l'); });
+  tb.classList.add('drop-l');
+});
+win.addEventListener('drop', function (ev) {
+  var tb = ev.target.closest('.tab'); if (dragFrom == null || !tb) return;
+  ev.preventDefault();
+  var activeRef = S.tabs[S.active], to = +tb.dataset.i;
+  var moved = S.tabs.splice(dragFrom, 1)[0];
+  if (to > dragFrom) to--;
+  S.tabs.splice(to, 0, moved);
+  S.active = S.tabs.indexOf(activeRef);
+  dragFrom = null; render();
+});
+win.addEventListener('dragend', function () { dragFrom = null; render(); });
+
+win.addEventListener('input', function (ev) {
+  var id = ev.target.id;
+  if (id === 'addr-in') { S.addrText = ev.target.value; S.sel = 0; render(); }
+  else if (id === 'find-in') { S.find.q = ev.target.value; S.find.idx = 1; render(); }
+  else if (id === 'pal-in') { S.palette.q = ev.target.value; S.palette.sel = 0; render(); }
+  else if (id === 'hist-in') { S.histQ = ev.target.value; render(); }
+});
+win.addEventListener('focusin', function () { if (!S.focused) { S.focused = true; render(); } });
+
+document.addEventListener('keydown', function (ev) {
+  if (!win.contains(document.activeElement) && document.activeElement !== win) return;
+  var id = document.activeElement.id, k = ev.key, ctrl = ev.ctrlKey || ev.metaKey;
+  var handled = true;
+  if (id === 'addr-in') {
+    var rows = S._sugg || [];
+    if (k === 'Escape') { S.addrFocus = false; win.focus(); }
+    else if (k === 'ArrowDown') S.sel = Math.min(rows.length - 1, S.sel + 1);
+    else if (k === 'ArrowUp') S.sel = Math.max(0, S.sel - 1);
+    else if (k === 'Tab' && rows.length) { var rw = rows[S.sel]; if (rw.target) S.addrText = rw.target; }
+    else if (k === 'Enter') { var rr = rows[S.sel]; S.addrFocus = false; if (ev.altKey && rr && rr.target) { newTab(rr.target); } else if (rr) run('sugg', { dataset: { i: S.sel } }); else { var u = resolve(S.addrText); if (u) navigate(u); } win.focus(); }
+    else handled = false;
+    if (handled) { ev.preventDefault(); render(); return; }
+  }
+  if (id === 'find-in') {
+    if (k === 'Enter') { run(ev.shiftKey ? 'findprev' : 'findnext'); ev.preventDefault(); render(); return; }
+    if (k === 'Escape') { S.find = null; win.focus(); ev.preventDefault(); render(); return; }
+  }
+  if (id === 'pal-in') {
+    var pr = S._pal || [];
+    if (k === 'ArrowDown') S.palette.sel = Math.min(pr.length - 1, S.palette.sel + 1);
+    else if (k === 'ArrowUp') S.palette.sel = Math.max(0, S.palette.sel - 1);
+    else if (k === 'Enter') { var c = pr[S.palette.sel]; S.palette = null; win.focus(); if (c) dispatchCmd(c.run); }
+    else if (k === 'Escape') { S.palette = null; win.focus(); }
+    else return;
+    ev.preventDefault(); render(); return;
+  }
+  handled = true;
+  if (k === 'Escape') { if (S.pop || S.palette) { closePops(); S.palette = null; } else if (S.find) S.find = null; else if (tab().loading) tab().loading = false; else handled = false; }
+  else if (ctrl && ev.shiftKey && (k === 'T' || k === 't')) run('reopen', { dataset: {} });
+  else if (ctrl && ev.shiftKey && (k === 'N' || k === 'n')) run('ephwin', { dataset: {} });
+  else if (ctrl && (k === 'l' || k === 'L')) run('addrfocus', { dataset: {} });
+  else if (ctrl && (k === 'k' || k === 'K')) run('palette', { dataset: {} });
+  else if (ctrl && (k === 'f' || k === 'F')) run('find', { dataset: {} });
+  else if (ctrl && (k === 'b' || k === 'B')) run('shield', { dataset: {} });
+  else if (ctrl && (k === 'j' || k === 'J')) run('dl', { dataset: {} });
+  else if (ctrl && (k === 'h' || k === 'H')) run('history', { dataset: {} });
+  else if (ctrl && k === ',') run('settings', { dataset: {} });
+  else if (ctrl && (k === 't' || k === 'T')) run('newtab', { dataset: {} });
+  else if (ctrl && (k === 'w' || k === 'W')) closeTab(S.active);
+  else if (ctrl && k === 'Tab') S.active = (S.active + (ev.shiftKey ? S.tabs.length - 1 : 1)) % S.tabs.length;
+  else if (ctrl && /^[1-9]$/.test(k)) S.active = k === '9' ? S.tabs.length - 1 : Math.min(+k - 1, S.tabs.length - 1);
+  else if (ctrl && (k === '=' || k === '+')) run('zoomin');
+  else if (ctrl && k === '-') run('zoomout');
+  else if (ctrl && k === '0') run('zoomreset');
+  else if (ev.altKey && (k === 't' || k === 'T')) dispatchCmd('nexttheme');
+  else if (ev.altKey && k === 'ArrowLeft') run('back', { dataset: {} });
+  else if (k === 'F11') dispatchCmd('fullscreen');
+  else if (k === 'F5' || (ctrl && (k === 'r' || k === 'R'))) run('reload');
+  else handled = false;
+  if (handled) { ev.preventDefault(); render(); }
+});
+document.addEventListener('mousedown', function (ev) {
+  if (!win.contains(ev.target) && S.focused && !ev.target.closest('.stage')) { S.focused = false; closePops(); render(); }
+});
+document.getElementById('dock').addEventListener('click', function (ev) {
+  var b = ev.target.closest('[data-dock]'); if (!b) return;
+  S.minimized = false; S.closed = false; render(); win.focus();
+});
+document.getElementById('themes').addEventListener('click', function (ev) {
+  var b = ev.target.closest('[data-theme-pick]'); if (b) { setTheme(b.dataset.themePick); render(); }
+});
+
+// ================================================================ states
+var NODES = [
+ { g: 'system', id: 'colour', label: 'semantic colour', apply: function () { S.pop = { type: 'site' }; S.perm = { host: 'ring-dynamics.example', what: 'microphone' }; S.panel = 'shield'; },
+   what: 'Four muted tones sit beside the monochrome palette. They name a state (allowed, asking, paused, refused) without pulling focus from the page. The accent stays reserved for focus and selection.',
+   how: ['<b>ok</b> (sage): allowed, secure, finished, params stripped. <b>info</b> (slate blue): asking, runtime fakes, neutral notices. <b>warn</b> (ochre): paused, http, offline, beacons. <b>bad</b> (dusty red): blocked, refused, failed, crashed, close-window hover.', 'Each tone is drawn the same way: the colour as text over a ~22% tint of itself. Never a solid fill under bright text, never a gradient.', 'Tones only mark state. They never decorate, and a tone never appears without the word that names it, so meaning never depends on colour alone.', 'tls stays grey on purpose. Secure is the normal case; only the exceptions get colour.', 'Each palette has its own tones, matched to its lightness. Zenith uses darker tones so they hold contrast on white.'],
+   keys: [],
+   build: ['Add <code>ok, info, warn, bad</code> to <code>theme::Palette</code> and the Slint <code>Theme</code> global. Precompute the tints in Rust (<code>mix(tone, bg0, 0.22)</code>) as <code>ok-tint</code> etc., since Slint has no color-mix.', 'Slint <code>Seg</code> component takes a <code>tone</code> per option; pressed = tint background + tone text.', 'Contrast target: tone on its tint ≥ 4.5:1 at 12px in every palette.'],
+   extra: function () {
+     return '<div class="tones"><span class="muted">palette</span><span>ok</span><span>info</span><span>warn</span><span>bad</span>' + ORDER.map(function (k) {
+       var q = PAL[k];
+       return '<span' + (k === theme ? ' style="color:var(--acc)"' : '') + '>' + q.name + '</span>' + ['ok', 'info', 'warn', 'bad'].map(function (t) { return '<span><i style="background:' + q[t] + '"></i>' + q[t] + '</span>'; }).join('');
+     }).join('') + '</div>';
+   } },
+ { g: 'window', id: 'titlebar', label: 'custom title bar', apply: function () {},
+   what: 'The tab bar is the title bar. No OS caption, no second row: workspaces left, address centre, status and window controls right, like a waybar module layout.',
+   how: ['Empty bar space on either side of the address drags the window. Double-click it to maximize or restore. Right-click it for the system menu.', 'Dragging to a screen edge snaps (Aero Snap). Hovering maximize shows the Windows 11 snap-layout flyout.', 'Window controls are three 46px cells. Close fills with the theme\'s critical colour on hover; monochrome themes invert instead.', 'A 4px invisible border on every edge resizes the window. The visible 1px border disappears when maximized.', 'Under a tiling compositor (Hyprland, Sway) the controls are hidden: the compositor owns the window. Settings › appearance › window controls overrides this.'],
+   keys: [['win+arrows', 'snap and maximize'], ['alt+space', 'system menu'], ['alt+f4', 'close window'], ['double-click bar', 'maximize / restore']],
+   build: ['Slint window with <code>no-frame: true</code> is not enough on Windows: keep <code>WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX</code> via SetWindowLongPtr so snap, the shadowless resize and minimize animation keep working.', 'Subclass the WndProc. <code>WM_NCCALCSIZE</code> returns 0 so the client area covers the caption; when maximized, inset by the frame thickness so nothing is cut off.', '<code>WM_NCHITTEST</code>: <code>HTCAPTION</code> over drag rects (Slint exports them as properties after layout), <code>HTMAXBUTTON</code> over the maximize cell (this is what enables snap layouts), <code>HTLEFT…HTBOTTOMRIGHT</code> in the 4px edge band.', 'WebView2 is a child HWND, so hit-testing never reaches it above the bar. Linux/Wayland: <code>xdg-decoration</code> server-side when offered, otherwise winit <code>drag_window()</code> from the drag rects.'] },
+ { g: 'window', id: 'unfocused', label: 'unfocused window', apply: function () { S.focused = false; },
+   what: 'When another app has the keyboard, the window says so without fading anything out.',
+   how: ['The active tab cell drops from the accent fill to bg3, so the accent only ever marks the window that takes keys.', 'Window-control glyphs and the progress line go to the secondary grey.', 'Everything stays at full contrast and clickable; one click focuses and acts.'],
+   keys: [['click', 'focus and act in one click']],
+   build: ['winit <code>Focused(bool)</code> → Slint property <code>window-active</code>; styles bind to it.', 'Dropdowns and popups close on focus loss.'] },
+ { g: 'window', id: 'maximized', label: 'maximized', apply: function () { S.max = true; },
+   what: 'Maximized drops the outer border and swaps the maximize glyph for restore.',
+   how: ['Dragging the bar of a maximized window restores it under the cursor at its previous size, as Windows does natively.', 'No layout changes: the bar stays 32px and nothing moves.'],
+   keys: [['win+up / win+down', 'maximize / restore']],
+   build: ['Track <code>WM_SIZE</code> with <code>SIZE_MAXIMIZED</code> → Slint property <code>maximized</code>.', 'Inset the client rect by <code>GetSystemMetrics(SM_CXFRAME)+SM_CXPADDEDBORDER</code> while maximized, or the bar slides off-screen.'] },
+ { g: 'window', id: 'fullscreen', label: 'fullscreen (F11)', apply: function () { S.fs = true; toast('F11 exits fullscreen'); },
+   what: 'Fullscreen hides all chrome. Moving the pointer to the top edge brings the bar back over the page until the pointer leaves.',
+   how: ['The page fills the screen. A toast says how to leave, once per session.', 'A 6px hot zone at the top edge reveals the bar. It hides again 600ms after the pointer moves 60px away.', 'Page-initiated fullscreen (a video player) uses the same rules and leaves on Esc.'],
+   keys: [['F11', 'toggle fullscreen'], ['esc', 'leave page fullscreen']],
+   build: ['WebView2 <code>ContainsFullScreenElementChanged</code> drives page fullscreen.', 'The revealed bar is an owned popup window over the webview; the webview itself stays full-size so the page never reflows.'] },
+ { g: 'window', id: 'narrow', label: 'narrow window', apply: function () { S.narrow = true; },
+   what: 'Below 720px the chrome compacts instead of wrapping: one row, always.',
+   how: ['The active tab title shortens to 10 characters; other tabs were already numbers.', 'The address shows only the host while idle, and the full URL on focus.', 'The shield cell shows only the count. Below 480px back/forward fold into the menu.', 'The drag gaps never shrink below 16px, so the window can always be moved.'],
+   keys: [],
+   build: ['Pure Slint layout: breakpoints read <code>root.width</code>; no Rust involvement.'] },
+ { g: 'window', id: 'main-menu', label: 'main menu', apply: function () { S.pop = { type: 'main' }; },
+   what: 'One menu for everything that has no cell of its own, so a new user can find every feature without knowing keys.',
+   how: ['Each item shows its shortcut on the right; using the menu teaches the keys.', 'Zoom and theme are inline rows: change them without closing the menu.', 'Closes on Esc, outside click, focus loss, or after running an item.'],
+   keys: [['alt', 'open menu (tap and release)'], ['up/down, enter', 'pick and run']],
+   build: ['Transient surfaces (menus, popovers, tooltips) are owned, borderless popup windows: they are the only things allowed over the page, and they close when focus leaves.', 'Persistent surfaces (panels, find, permission strips) tile and push the page.'] },
+ { g: 'window', id: 'ephemeral', label: 'ephemeral window', apply: function () { S.eph = true; S.tabs = [{ title: '', host: '', url: '', blocked: 0 }]; S.active = 0; S.addrFocus = true; },
+   what: 'A private window. Everything lives in memory and disappears when the window closes.',
+   how: ['A 1px accent rule runs along the top edge and an inverted "eph" cell leads the bar, so it can never be mistaken for a normal window.', 'The empty tab states what is not saved.', 'Shield, filters and theme apply; history, cookies, cache and downloads-list are not written.'],
+   keys: [['ctrl+shift+n', 'new ephemeral window']],
+   build: ['WebView2 <code>with_incognito(true)</code> in its own environment; separate process so normal and ephemeral windows never share cookies.'] },
+
+ { g: 'tabs', id: 'tab-strip', label: 'tab states', apply: function () { S.tabs[4].loading = true; S.tabs.push({ title: 'Grand finale', host: 'archive.ring-dynamics.example', url: 'https://archive.ring-dynamics.example/cassini', art: 'rings', blocked: 9, trimmed: true, wv: true }); S.tabs.push({ title: 'Map', host: 'maps.example', url: 'https://maps.example', art: 'rings', crashed: true, blocked: 3, wv: true }); S.tabs[3].muted = false; },
+   what: 'Tabs are numbered cells, like Hyprland workspaces. The number is the shortcut; only the active tab spends width on a title.',
+   how: ['Active: accent fill and title. Inactive: number in grey. Pinned: always leftmost, bg2 fill, after a separator, cannot be closed by accident.', 'Loading: 2px line along the cell bottom. Audio: speaker glyph after the number; click it to mute. Muted: crossed speaker.', 'Trimmed (put to sleep to save memory): number in the dim grey. Crashed: number struck through in the critical colour.', 'Hover shows a close glyph; middle-click closes from anywhere on the cell.'],
+   keys: [['ctrl+1..8', 'go to tab n'], ['ctrl+9', 'last tab'], ['ctrl+tab', 'next tab'], ['ctrl+m', 'mute tab'], ['middle-click', 'close tab']],
+   build: ['WebView2 <code>IsDocumentPlayingAudio</code> and <code>IsMuted</code> drive the speaker glyph.', 'Trim after 5 min hidden: <code>TrySuspend()</code>, plus <code>MemoryUsageTargetLevel.Low</code> immediately on hide.', '<code>ProcessFailed</code> marks the tab crashed.'] },
+ { g: 'tabs', id: 'tab-hover', label: 'hover card', apply: function () { S.hover = { kind: 'tab', i: 3, x: 100, pinned: true }; },
+   what: 'Holding the pointer on a tab for 450ms shows its full title, address and state, so numbered tabs stay readable.',
+   how: ['Title, full URL, and one state line: blocked count, audio, trimmed or loading.', 'Moving to the next tab swaps the card without the delay.', 'Never shown while dragging or while a menu is open.'],
+   keys: [],
+   build: ['Owned popup window positioned under the cell, clamped to the window edge.'] },
+ { g: 'tabs', id: 'tab-menu', label: 'tab menu', apply: function () { S.pop = { type: 'tab', i: 1, x: 70, y: 32 }; },
+   what: 'Right-click a tab for the actions people expect from every browser, in the usual order.',
+   how: ['Reload, duplicate, pin, mute, copy clean link; then move to new window; then the close actions.', '"Close other tabs" never closes pinned tabs. Every close can be undone with the toast or ctrl+shift+t.', 'Unavailable actions (mute on a silent tab) are shown disabled, not hidden, so the menu never changes shape.'],
+   keys: [['shift+f10', 'open for the active tab']],
+   build: ['Same owned popup as the main menu, anchored at the cell\'s left edge under the bar.'] },
+ { g: 'tabs', id: 'tab-overflow', label: 'many tabs', apply: function () { var hosts = ['wiki.hypr.land', 'docs.slint.dev', 'github.com', 'crates.io', 'learn.microsoft.com', 'catppuccin.com', 'easylist.to', 'news.example', 'radio.example', 'maps.example', 'shop.example', 'forum.example', 'blog.example', 'video.example']; hosts.forEach(function (h) { S.tabs.push({ title: h, host: h, url: 'https://' + h, art: 'rings', blocked: 5, wv: true }); }); S.active = 9; S.overflow = 4; },
+   what: 'When the cells do not fit, the strip scrolls; it never shrinks cells or wraps to a second row.',
+   how: ['‹ n and n › cells at the strip ends say how many tabs are hidden on each side; click to scroll by three.', 'The wheel over the strip scrolls it. The active tab is always scrolled into view.', 'The command palette and address bar list open tabs, so a hidden tab is two keystrokes away.'],
+   keys: [['ctrl+k, type', 'jump to any tab by name']],
+   build: ['Slint Flickable with horizontal viewport; Rust keeps <code>active</code> in view after every change.'] },
+ { g: 'tabs', id: 'tab-reorder', label: 'reorder by drag', apply: function () { toast('drag a tab cell onto another to move it'); },
+   what: 'Drag a cell to move it. Numbers renumber as you drop, because the number is the position.',
+   how: ['The dragged cell becomes an outline; a 2px accent bar marks where it will land.', 'Dropping onto the pinned group pins the tab.', 'Dragging a cell out of the bar tears it into a new window.'],
+   keys: [['ctrl+shift+pgup/pgdn', 'move active tab left / right']],
+   build: ['Slint TouchArea pointer events; tear-off creates a new top-level window and reparents the WebView2 controller (<code>put_ParentWindow</code>) so the page is not reloaded.'] },
+ { g: 'tabs', id: 'tab-reopen', label: 'close & reopen', apply: function () { toast('closed docs.rs', 'reopen', 'reopen · ctrl+shift+t'); },
+   what: 'Closing never asks for confirmation; it can always be undone.',
+   how: ['A toast names what closed and offers reopen for 4 seconds.', 'ctrl+shift+t reopens the last 25 closed tabs in order, with their back history.', 'The empty tab lists recently closed tabs.'],
+   keys: [['ctrl+shift+t', 'reopen closed tab'], ['ctrl+w', 'close tab']],
+   build: ['Keep closed tabs\' URL + navigation history (not the process); restore with the saved history list.'] },
+
+ { g: 'address', id: 'address-idle', label: 'idle & security', apply: function () {},
+   what: 'At rest the address shows who you are talking to: the host in bold, the rest in grey.',
+   how: ['The tag on the left is the connection state: tls (grey), http (warning colour), cert (critical), brx for internal pages, blocked for refused pages.', 'Click the tag for site info. Click the address to edit; the full URL is selected.', 'Punycode hosts are shown as xn-- with the tag in the warning colour, so look-alike domains stand out.'],
+   keys: [['ctrl+l', 'edit address']],
+   build: ['WebView2 <code>ServerCertificateErrorDetected</code> and the navigation scheme feed the tag; no lock icon.'] },
+ { g: 'address', id: 'address-focus', label: 'focus & suggestions', apply: function () { S.addrFocus = true; S.addrText = 'ring'; },
+   what: 'Typing shows suggestions as rows that push the page down. Each row says what Enter will do.',
+   how: ['Row kinds: go (the URL as typed, already cleaned), tab (switch to an open tab instead of opening a duplicate), hist (history), find (search), cmd (type > to run commands).', 'Up/down picks, tab completes into the field, enter runs, alt+enter opens in a new tab.', 'shift+delete on a hist row forgets it.', 'Esc gives the page its focus and its URL back.'],
+   keys: [['enter', 'go'], ['alt+enter', 'go in new tab'], ['up/down', 'pick'], ['tab', 'complete'], ['>', 'command mode'], ['esc', 'back to page']],
+   build: ['Suggestions are computed in Rust on every <code>edited</code>; history search is a prefix + substring scan over an in-memory index (500 entries).'] },
+ { g: 'address', id: 'address-strip', label: 'tracking-param preview', apply: function () { S.addrFocus = true; S.addrText = 'shop.example/item/88?utm_source=newsletter&utm_campaign=fall&fbclid=IwAR3x9&color=teal'; },
+   what: 'Before you go, the strip row shows which tracking parameters will be removed.',
+   how: ['The go row already shows the clean URL; the strip row lists what was taken out.', 'Paste a link with tracking and you see exactly what the shield did.', 'To keep a parameter, add the site to the allow list in settings › shield.'],
+   keys: [],
+   build: ['Same <code>params::clean_navigation</code> the navigation layer uses, so the preview always matches what happens.'] },
+ { g: 'address', id: 'site-info', label: 'site info', apply: function () { S.pop = { type: 'site' }; S.bellQuiet = true; },
+   what: 'Everything about the current site in one popover: connection, shield, permissions, storage.',
+   how: ['Shield on/paused for this site, with the page\'s blocked count.', 'Camera, microphone, location and notifications as ask/allow/block, toned info/ok/bad so the answer reads at a glance. Notification requests are blocked quietly by default; a crossed bell in the address shows one was refused.', 'Cookie and storage summary, with clear site data.'],
+   keys: [],
+   build: ['WebView2 <code>PermissionRequested</code> with saved per-origin decisions; cookies via <code>CookieManager</code>.'] },
+ { g: 'address', id: 'zoom', label: 'zoom', apply: function () { S.zoom = 120; },
+   what: 'Zoom shows up only when it is not 100%: a cell with the percentage appears in the bar. Click it to reset.',
+   how: ['Remembered per site. The menu has −/+ controls.', 'Steps: 30 50 67 80 90 100 110 125 150 175 200 250 300.'],
+   keys: [['ctrl+= / ctrl+-', 'zoom in / out'], ['ctrl+0', 'reset'], ['ctrl+wheel', 'zoom']],
+   build: ['<code>ICoreWebView2Controller::put_ZoomFactor</code>; listen to <code>ZoomFactorChanged</code> for ctrl+wheel.'] },
+
+ { g: 'page', id: 'loading', label: 'loading', apply: function () { S.tabs[1].loading = true; S.tabs[1].progress = 45; },
+   what: 'Loading shows in three places at once: the progress line under the bar, the tab cell underline, and reload turning into stop.',
+   how: ['Progress moves at real milestones: request sent, response started, DOM ready, load. It never animates on its own.', 'Esc or the stop cell stops loading.'],
+   keys: [['esc', 'stop'], ['ctrl+r / F5', 'reload'], ['ctrl+shift+r', 'reload, bypass cache']],
+   build: ['<code>NavigationStarting</code> 10%, <code>ContentLoading</code> 40%, <code>DOMContentLoaded</code> 75%, <code>NavigationCompleted</code> done.'] },
+ { g: 'page', id: 'link-hover', label: 'link destination', apply: function () { S.hover = { kind: 'link', li: 0, pinned: true }; },
+   what: 'Hovering a link shows where it goes in the bottom-left corner. Links carrying trackers show the clean address and what will be stripped.',
+   how: ['Clean destination in the accent colour, removed keys in grey.', 'The status box moves to the right corner if the pointer is near it.', 'ctrl-click or middle-click opens in a background tab; the toast says so and offers to switch.'],
+   keys: [['ctrl+click', 'open in background tab'], ['middle-click', 'open in background tab']],
+   build: ['The runtime script reports hovered link targets over IPC (mouseover on <code>a[href]</code>, debounced); the status box is an owned popup.'] },
+ { g: 'page', id: 'find', label: 'find in page', apply: function () { S.find = { q: 'ring', idx: 2, cs: false }; },
+   what: 'Find is a bar along the bottom of the page. It tiles, so it never covers the text it is finding.',
+   how: ['Matches highlight as you type; the current one is a stronger colour. The count reads 2/14.', 'enter / shift+enter step through matches. "aa" toggles match case.', 'No match turns the count to the critical colour.', 'Esc closes and keeps the current match selected.'],
+   keys: [['ctrl+f', 'find'], ['enter / shift+enter', 'next / previous'], ['esc', 'close']],
+   build: ['WebView2 <code>ICoreWebView2Find</code> (runtime 1.0.2849+) with <code>SuppressDefaultFindDialog</code>; fallback to <code>window.find</code> via the runtime script.'] },
+ { g: 'page', id: 'page-menu', label: 'page menu', apply: function () { S.pop = { type: 'page', link: ARTICLES.rings.links[0], li: 0, x: 380, y: 210 }; },
+   what: 'Right-click menus match the context. On a link with trackers, "copy clean link" comes first and says how much it strips.',
+   how: ['Link: open in new tab, open in ephemeral window, copy clean link, copy link as-is, inspect.', 'Page: back, forward, reload, find, copy clean page link, save, view source, inspect.', 'Selection: copy, search for the selection, find the selection.'],
+   keys: [['shift+f10 / menu key', 'open at the focused element']],
+   build: ['WebView2 <code>ContextMenuRequested</code>: set <code>Handled</code>, read the target from <code>ContextMenuTarget</code>, show our popup, then run the chosen command.'] },
+ { g: 'page', id: 'permission', label: 'permission request', apply: function () { S.perm = { host: 'meet.example', what: 'camera' }; S.tabs[1].host = 'meet.example'; S.tabs[1].url = 'https://meet.example/r/orbital-group'; S.tabs[1].title = 'Orbital group call'; },
+   what: 'A site asking for the camera, microphone or location gets a strip under the bar. It pushes the page down and waits.',
+   how: ['Three answers: block, allow once, allow. The safe answers come first; allow is the filled button because it is the one people came to press.', 'Notifications are not asked: they are refused quietly and marked with a crossed bell in the address.', 'Change any answer later in site info.'],
+   keys: [['esc', 'dismiss (counts as block for this visit)']],
+   build: ['WebView2 <code>PermissionRequested</code> with a deferral; the strip resolves it.'] },
+ { g: 'page', id: 'download-start', label: 'download running', apply: function () { S.dl = { pct: 37, done: false }; },
+   what: 'A download adds a cell to the bar with its percentage, and removes it 4 seconds after the last one finishes.',
+   how: ['Click the cell for the downloads panel.', 'Finished: the cell reads "dl done" in the accent colour, then goes away.', 'Nothing pops up and the page keeps focus.'],
+   keys: [['ctrl+j', 'downloads panel']],
+   build: ['WebView2 <code>DownloadStarting</code>: set <code>Handled</code> to hide Edge\'s flyout, keep the operation, read <code>BytesReceived/TotalBytesToReceive</code>.'] },
+
+ { g: 'shield', id: 'shield-panel', label: 'shield panel', apply: function () { S.panel = 'shield'; },
+   what: 'The shield panel tiles on the right and shows what was stopped on this page, layer by layer.',
+   how: ['Global on/off, and on/paused for this site.', 'Counts per layer: transport, runtime, beacons, params, navigations. The log lists the newest first.', '"edit filters" opens settings › shield.'],
+   keys: [['ctrl+b', 'toggle panel']],
+   build: ['Already built: ledger per tab, events through <code>shield::emit</code>. New: per-site pause set in config.'] },
+ { g: 'shield', id: 'shield-paused', label: 'paused on a site', apply: function () { S.paused[S.tabs[1].host] = true; S.panel = 'shield'; },
+   what: 'Pausing the shield on one site is how you fix a broken page without turning protection off everywhere.',
+   how: ['The shield cell reads "paused" in the warning colour on that site only.', 'The panel keeps counting, as "seen", so you can see what the site loads.', 'The pause is remembered; the paused list is in settings › shield.'],
+   keys: [['ctrl+k "pause"', 'pause on this site']],
+   build: ['Rules check a <code>paused: HashSet&lt;host&gt;</code> before the verdict; the runtime script gets a flag per document.'] },
+ { g: 'shield', id: 'blocked-page', label: 'blocked page', apply: function () { var t = S.tabs[1]; t.blockedNav = true; t.host = 'adclick.example'; t.url = 'https://adclick.example/r/9918'; t.title = 'blocked'; t.blocked = 1; },
+   what: 'Navigating to a tracker host shows a flat page that names the rule and offers a way out.',
+   how: ['go back is the filled button. "allow this site" adds an allow rule and loads the page.', 'The address tag reads blocked.'],
+   keys: [['alt+left', 'go back']],
+   build: ['Navigation layer cancels and loads the page with <code>NavigateToString</code>; actions post IPC.'] },
+
+ { g: 'surfaces', id: 'palette', label: 'command palette', apply: function () { S.palette = { q: '', sel: 0 }; },
+   what: 'ctrl+k opens a palette that runs any command, switches to any tab and changes any setting by name.',
+   how: ['Type words in any order: "zen th" finds theme: zenith.', 'Shortcuts show on the right, so the palette teaches them.', 'Typing > in the address bar gives the same commands.'],
+   keys: [['ctrl+k', 'open'], ['enter', 'run'], ['esc', 'close']],
+   build: ['Owned popup anchored under the bar; command table shared with menus and keybindings so names never drift.'] },
+ { g: 'surfaces', id: 'panel-downloads', label: 'downloads panel', apply: function () { S.dl = { pct: 37, done: false }; S.panel = 'dl'; },
+   what: 'Downloads tile on the right like the shield panel. Each row has a 1px progress line and its actions.',
+   how: ['Running: pause, cancel. Finished: open, show in folder. Failed: retry, remove, with the reason in the critical colour.', 'clear finished empties the list; files stay on disk.'],
+   keys: [['ctrl+j', 'toggle panel']],
+   build: ['DownloadOperation per row; "show in folder" uses <code>SHOpenFolderAndSelectItems</code>.'] },
+ { g: 'surfaces', id: 'page-history', label: 'history page', apply: function () { var t = S.tabs[1]; Object.assign(t, { url: 'brx://history', host: 'history', title: 'history', page: 'history', wv: false }); },
+   what: 'History is an internal page in chrome style, grouped by day and searchable as you type.',
+   how: ['Each row: time, title, address. Hover a row to remove it.', 'clear range removes the last hour, day, week or everything.', 'Ephemeral windows never appear here.'],
+   keys: [['ctrl+h', 'open history'], ['ctrl+f', 'search']],
+   build: ['Internal pages are Slint views, not web pages: the webview is hidden while one is open.'] },
+ { g: 'surfaces', id: 'page-settings', label: 'settings', apply: function () { var t = S.tabs[1]; Object.assign(t, { url: 'brx://settings', host: 'settings', title: 'settings', page: 'settings', wv: false }); S.settingsSec = 'appearance'; },
+   what: 'Settings is one internal page with five sections. Every change applies immediately; there is no save button.',
+   how: ['appearance: theme (live), follow orrery, font, density, window controls.', 'search & start: engine, start page, which tab gets focus after a close.', 'shield: lists, filters.txt editor with live validation, beacon handling, paused sites.', 'privacy: cookies, clear on exit, autoplay, permissions. keys: every binding, rebindable.'],
+   keys: [['ctrl+,', 'open settings']],
+   build: ['Settings write to config.json on change; "follow orrery" watches the Orrery current-theme file and maps its colors.toml.'] },
+ { g: 'surfaces', id: 'empty-tab', label: 'empty tab', apply: function () { S.tabs.push({ title: '', host: '', url: '', blocked: 0 }); S.active = S.tabs.length - 1; },
+   what: 'A new tab is a keymap, the session tally and recently closed tabs. No web engine starts until you go somewhere.',
+   how: ['The address is focused and ready to type.', 'Recently closed entries reopen on click.'],
+   keys: [['ctrl+t', 'new tab']],
+   build: ['Already built (keymap + tally); add the recently-closed list.'] },
+
+ { g: 'errors', id: 'error-offline', label: "can't reach site", apply: function () { var t = S.tabs[1]; t.offline = true; t.host = 'shop.example'; t.url = 'https://shop.example/item/88'; t.title = "can't reach shop.example"; },
+   what: 'Errors are internal pages in chrome style: what happened, the code, and the next action.',
+   how: ['retry is the filled button. The page retries by itself when the network comes back.'],
+   keys: [['ctrl+r', 'retry']],
+   build: ['<code>NavigationCompleted</code> with <code>WebErrorStatus</code> → our page via <code>NavigateToString</code>.'] },
+ { g: 'errors', id: 'error-cert', label: 'certificate error', apply: function () { var t = S.tabs[1]; t.certErr = true; t.host = 'expired.ring-dynamics.example'; t.url = 'https://expired.ring-dynamics.example/'; t.title = 'not private'; },
+   what: 'A bad certificate stops the page and explains the risk in one line.',
+   how: ['go back is the only filled button. There is no one-click "proceed anyway".', 'To override once, type the URL with ! in front.'],
+   keys: [['alt+left', 'go back']],
+   build: ['<code>ServerCertificateErrorDetected</code> → <code>AlwaysDeny</code>, unless the navigation came from a ! override.'] },
+ { g: 'errors', id: 'error-crash', label: 'tab crashed', apply: function () { var t = S.tabs[1]; t.crashed = true; },
+   what: 'When a page process dies, only that tab shows it.',
+   how: ['The tab number is struck through in the critical colour.', 'reload restores the page with its history.'],
+   keys: [['ctrl+r', 'reload']],
+   build: ['WebView2 <code>ProcessFailed</code> (<code>RenderProcessExited</code>) → mark the tab; reload recreates the controller if the browser process died.'] }
+];
+var GROUPS = { system: 'system', window: 'window', tabs: 'tabs', address: 'address bar', page: 'page', shield: 'shield', surfaces: 'panels & pages', errors: 'errors' };
+
+function renderTree() {
+  var tree = document.getElementById('tree'), html = '', last = '';
+  html += '<label for="tsel" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">State</label><select class="tsel" id="tsel">' + NODES.map(function (n) { return '<option value="' + n.id + '"' + (n.id === current ? ' selected' : '') + '>' + GROUPS[n.g] + ' / ' + n.label + '</option>'; }).join('') + '</select>';
+  NODES.forEach(function (n) {
+    if (n.g !== last) { html += '<h2>' + GROUPS[n.g] + '</h2>'; last = n.g; }
+    html += '<button type="button" data-node="' + n.id + '" aria-current="' + (n.id === current) + '">' + n.label + '</button>';
+  });
+  tree.innerHTML = html;
+}
+function renderSpec(n) {
+  document.getElementById('capname').textContent = GROUPS[n.g] + ' / ' + n.label;
+  var spec = document.getElementById('spec');
+  spec.innerHTML = '<header><h1>' + esc(n.label) + '</h1><p>' + n.what + '</p>' + (n.extra ? n.extra() : '') + '</header>' +
+    '<section><h3>how it works</h3><ul>' + n.how.map(function (h) { return '<li>' + h + '</li>'; }).join('') + '</ul></section>' +
+    '<section><h3>keys</h3><ul class="keys">' + (n.keys.length ? n.keys.map(function (k) { return '<li><kbd>' + esc(k[0]) + '</kbd><span>' + esc(k[1]) + '</span></li>'; }).join('') : '<li><span class="muted">none specific to this state</span><span></span></li>') + '</ul></section>' +
+    '<section><h3>build notes</h3><ul>' + n.build.map(function (b) { return '<li>' + b + '</li>'; }).join('') + '</ul></section>';
+}
+function select(id, push) {
+  var n = NODES.filter(function (x) { return x.id === id; })[0] || NODES[0];
+  current = n.id;
+  clearTimeout(toastTimer);
+  S = fresh();
+  n.apply();
+  renderTree(); renderSpec(n); render();
+  if (push !== false && location.hash !== '#' + n.id) { try { history.replaceState(null, '', '#' + n.id); } catch (e) { location.hash = n.id; } }
+}
+document.getElementById('tree').addEventListener('click', function (ev) { var b = ev.target.closest('[data-node]'); if (b) select(b.dataset.node); });
+document.getElementById('tree').addEventListener('change', function (ev) { if (ev.target.id === 'tsel') select(ev.target.value); });
+window.addEventListener('hashchange', function () { var id = location.hash.slice(1); if (id && id !== current) select(id, false); });
+
+applyTheme();
+select((location.hash || '#titlebar').slice(1), false);
+})();
+</script>
