@@ -15,11 +15,27 @@ use config::Config;
 use shield::{Rules, Shield};
 use std::rc::Rc;
 
+/// `BRX_TIMING=1` prints how long each startup step took.
+pub fn mark(what: &str) {
+    use std::sync::OnceLock;
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    static ON: OnceLock<bool> = OnceLock::new();
+    let t0 = T0.get_or_init(std::time::Instant::now);
+    if *ON.get_or_init(|| std::env::var_os("BRX_TIMING").is_some()) {
+        eprintln!("[t] {:7.2} ms  {what}", t0.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
-    // CEF runs its helper processes (renderer, GPU, network) from this exe
+    mark("main");
+    // CEF runs its helper processes (renderer, GPU, network) from this exe;
+    // they carry --type=. The browser process must not touch libcef here:
+    // loading it (~280 MB) is left for the first page.
     #[cfg(feature = "engine-cef")]
-    if let Some(code) = engine::cef::run_subprocess() {
-        std::process::exit(code);
+    if std::env::args().any(|a| a.starts_with("--type=")) {
+        if let Some(code) = engine::cef::run_subprocess() {
+            std::process::exit(code);
+        }
     }
     let ephemeral = std::env::args().any(|a| a == "--ephemeral");
     let mut cfg = Config::load();
@@ -40,6 +56,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     rules.load_file(&filters);
     let shield = Rc::new(Shield::new(rules, cfg.shield));
+    mark("config + rules");
     shield::subscribe(|ev| post(Msg::Shield(ev)));
 
     // bundled Chromium starts lazily, on the first navigation (see
@@ -53,6 +70,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let ui = AppWindow::new()?;
+    mark("AppWindow::new");
     ui.on_submit(|s| post(Msg::Submit(s.into())));
     ui.on_edited(|s| post(Msg::Edited(s.into())));
     ui.on_complete(|i| post(Msg::Complete(i.max(0) as usize)));
@@ -95,6 +113,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     ui.show()?;
+    mark("show");
     let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     APP.with(|a| {
         #[allow(unused_mut)]
@@ -105,6 +124,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         *a.borrow_mut() = Some(app)
     });
+    mark("app ready");
     post(Msg::Startup(urls));
     slint::run_event_loop()?;
 

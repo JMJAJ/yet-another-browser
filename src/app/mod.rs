@@ -802,6 +802,7 @@ impl App {
         }
         match m {
             Msg::Startup(urls) => {
+                crate::mark("window realised");
                 if self.hwnd().is_none() && cfg!(windows) {
                     // window not realised yet; try again shortly
                     slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
