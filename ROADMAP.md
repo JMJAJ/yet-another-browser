@@ -77,8 +77,10 @@ so they are written once.
       `OnPreKeyEvent`, popup handling through `OnBeforePopup`.
 - [x] Engine telemetry off: no Google API keys, component updater, safe
       browsing, metrics or crash upload (command-line switches + prefs).
-- [ ] Packaging: CEF binaries fetched by `scripts/fetch-cef.sh` and staged
-      next to the exe by `build.rs` (done); trimmed release zip (to do).
+- [x] Packaging: CEF fetched by `scripts/fetch-cef.sh`, staged next to the
+      exe by `build.rs`; `scripts/package.sh` builds dist/ with one locale:
+      371 MB unpacked, 171 MB zip. libcef.dll is delay-loaded, so a missing
+      engine falls back to WebView2.
 - Gate: measure install size, idle RAM with one page, and cold start, and
   report them against WebView2 before making CEF the default.
   Measured 2026-11-13 (release, same binary, `BRX_ENGINE` switches engines):
@@ -93,6 +95,10 @@ so they are written once.
 
   Not yet on CEF: audio indicator on tabs (CEF has no playback event
   without taking over audio output) and page dark mode.
+  **Decision 2026-11-13: bundled Chromium is the default engine.**
+- **Done 2026-11-13.** Packaged build: window visible 121–154 ms warm
+  (338 ms first cold launch), empty window 14 MB, test page 115 MB and a
+  Wikipedia article 186 MB across all processes.
 - Done when: the tracker test page passes on CEF, budgets hold (engine files
   excluded), WebView2 removed or kept as fallback per the gate decision.
 

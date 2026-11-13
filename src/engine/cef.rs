@@ -92,7 +92,16 @@ fn on_ui(job: impl FnOnce() + Send + 'static) {
 /// CEF starts every helper process (renderer, GPU, network) by running this
 /// same exe. Call first thing in `main`: returns the exit code when this is
 /// a helper, `None` in the browser process.
+/// Whether the engine files sit next to the exe (libcef.dll is delay-loaded,
+/// so nothing CEF may be called without them).
+pub fn available() -> bool {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("libcef.dll").exists())).unwrap_or(false)
+}
+
 pub fn run_subprocess() -> Option<i32> {
+    if !available() {
+        return None;
+    }
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = args::Args::new();
     let mut app = BrxApp::new();
@@ -112,6 +121,9 @@ pub fn started() -> bool {
 pub fn ensure_started(ephemeral: bool) -> bool {
     static RESULT: OnceLock<bool> = OnceLock::new();
     *RESULT.get_or_init(|| {
+        if !available() {
+            return false;
+        }
         let root = if ephemeral {
             std::env::temp_dir().join(format!("brxswer-eph-{}", std::process::id()))
         } else {
@@ -134,6 +146,8 @@ fn start(root: &std::path::Path, cache: Option<&std::path::Path>) -> bool {
         cache_path: cache.map_or_else(|| s(""), |c| s(&c.to_string_lossy())),
         persist_session_cookies: 1,
         log_severity: LogSeverity::DISABLE,
+        // one language pack ships; every user sends the same Accept-Language
+        locale: s("en-US"),
         ..Default::default()
     };
     initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) == 1

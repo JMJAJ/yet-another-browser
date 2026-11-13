@@ -13,6 +13,10 @@ fn stage_cef() {
     if std::env::var_os("CARGO_FEATURE_ENGINE_CEF").is_none() {
         return;
     }
+    // load libcef.dll on first use, so a missing engine falls back to
+    // WebView2 instead of stopping the exe from starting
+    println!("cargo::rustc-link-arg-bins=/DELAYLOAD:libcef.dll");
+    println!("cargo::rustc-link-lib=delayimp");
     let Some(cef) = std::env::var_os("CEF_PATH").map(PathBuf::from) else { return };
     // OUT_DIR = target/<profile>/build/<pkg>/out
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
