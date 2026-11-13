@@ -1,0 +1,20 @@
+// Palette shared by every window. Globals are per window in Slint, so the
+// app writes the same values into each window's copy.
+
+export global Theme {
+    in-out property <color> bg0: #0a0a0a;
+    in-out property <color> bg1: #141414;
+    in-out property <color> bg2: #1e1e1e;
+    in-out property <color> bg3: #282828;
+    in-out property <color> fg: #e8e8e8;
+    in-out property <color> acc: #ffffff;
+    in-out property <color> mid: #a0a0a0;
+    in-out property <color> dim: #606060;
+    // muted semantic tones: state only, never decoration
+    in-out property <color> ok: #8fa68b;
+    in-out property <color> info: #8597aa;
+    in-out property <color> warn: #b5a07a;
+    in-out property <color> bad: #bc8888;
+    in-out property <string> name: "eclipse";
+    in-out property <string> font: "Consolas";
+}

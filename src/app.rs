@@ -9,7 +9,7 @@ use crate::omnibox;
 use crate::platform::{self, ChromeEvent};
 use crate::shield::{self, params, urlparts, Layer, Ledger, Shield, ShieldEvent, Verdict};
 use crate::theme::{self, THEMES};
-use crate::{AppWindow, LayerRow, LogRow, Suggestion, TabItem, Theme};
+use crate::{AppWindow, LayerRow, LogRow, MenuRow, MenuWindow, Suggestion, TabItem, Theme};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -35,6 +35,7 @@ pub enum Command {
     Reload,
     Panel,
     Theme,
+    Quit,
 }
 
 impl Command {
@@ -50,6 +51,7 @@ impl Command {
             "alt+ArrowLeft" => Command::Back,
             "alt+ArrowRight" => Command::Forward,
             "alt+t" => Command::Theme,
+            "ctrl+q" => Command::Quit,
             _ => {
                 let d = combo.strip_prefix("ctrl+")?;
                 let n: usize = d.parse().ok().filter(|n| (1..=9).contains(n))?;
@@ -105,7 +107,6 @@ pub enum Msg {
     Forward,
     Reload,
     TogglePanel,
-    CycleTheme,
     SetShield(bool),
     PageFocus,
     Title(u64, String),
@@ -121,6 +122,10 @@ pub enum Msg {
     WinMinimize,
     WinMaximize,
     WinClose,
+    MenuToggle,
+    MenuPick(usize),
+    MenuTheme(usize),
+    MenuClose,
 }
 
 thread_local! {
@@ -185,6 +190,51 @@ pub struct App {
     panel: bool,
     history: Vec<(String, String)>,
     sugg_targets: Vec<String>,
+    menu: Menu,
+}
+
+/// What a main-menu row does.
+#[derive(Clone, Copy)]
+enum MenuAct {
+    Run(Command),
+    Nothing,
+}
+
+struct Menu {
+    win: MenuWindow,
+    owned: bool,
+    open: bool,
+    opened_at: std::time::Instant,
+    closed_at: Option<std::time::Instant>,
+    acts: Vec<MenuAct>,
+}
+
+fn hwnd_of(w: &slint::Window) -> Option<isize> {
+    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = w.window_handle();
+    let h = handle.window_handle().ok()?;
+    match h.as_raw() {
+        #[cfg(windows)]
+        RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
+        _ => None,
+    }
+}
+
+fn paint(g: &Theme<'_>, p: &theme::Palette, font: &str) {
+    g.set_bg0(theme::color(p.bg0));
+    g.set_bg1(theme::color(p.bg1));
+    g.set_bg2(theme::color(p.bg2));
+    g.set_bg3(theme::color(p.bg3));
+    g.set_fg(theme::color(p.fg));
+    g.set_acc(theme::color(p.acc));
+    g.set_mid(theme::color(p.mid));
+    g.set_dim(theme::color(p.dim));
+    g.set_ok(theme::color(p.ok));
+    g.set_info(theme::color(p.info));
+    g.set_warn(theme::color(p.warn));
+    g.set_bad(theme::color(p.bad));
+    g.set_name(p.short.into());
+    g.set_font(font.into());
 }
 
 fn html_escape(s: &str) -> String {
@@ -196,6 +246,10 @@ impl App {
         let script = shield::runtime_script(&shield.rules, &cfg.beacons);
         let ctx = WebContext::new(Some(crate::config::dir().join("webdata")));
         let theme = theme::index_of(&cfg.theme);
+        let menu_win = MenuWindow::new().expect("menu window");
+        menu_win.on_pick(|i| post(Msg::MenuPick(i.max(0) as usize)));
+        menu_win.on_pick_theme(|i| post(Msg::MenuTheme(i.max(0) as usize)));
+        menu_win.on_dismiss(|| post(Msg::MenuClose));
         App {
             ui,
             cfg,
@@ -210,6 +264,14 @@ impl App {
             panel: false,
             history: Vec::new(),
             sugg_targets: Vec::new(),
+            menu: Menu {
+                win: menu_win,
+                owned: false,
+                open: false,
+                opened_at: std::time::Instant::now(),
+                closed_at: None,
+                acts: Vec::new(),
+            },
         }
     }
 
@@ -226,13 +288,74 @@ impl App {
     }
 
     fn hwnd(&self) -> Option<isize> {
-        use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let handle = self.ui.window().window_handle();
-        let h = handle.window_handle().ok()?;
-        match h.as_raw() {
-            #[cfg(windows)]
-            RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
-            _ => None,
+        hwnd_of(self.ui.window())
+    }
+
+    // ------------------------------------------------------------- menus
+
+    fn open_menu(&mut self) {
+        let rows: Vec<(u8, &str, &str, MenuAct)> = vec![
+            (0, "new tab", "ctrl+t", MenuAct::Run(Command::NewTab)),
+            (0, "close tab", "ctrl+w", MenuAct::Run(Command::CloseTab)),
+            (1, "", "", MenuAct::Nothing),
+            (2, "theme", "", MenuAct::Nothing),
+            (1, "", "", MenuAct::Nothing),
+            (0, "shield", "ctrl+b", MenuAct::Run(Command::Panel)),
+            (0, "next theme", "alt+t", MenuAct::Run(Command::Theme)),
+            (1, "", "", MenuAct::Nothing),
+            (0, "quit", "ctrl+q", MenuAct::Run(Command::Quit)),
+        ];
+        let height: f32 = 12.0 + rows.iter().map(|r| match r.0 { 1 => 9.0, 2 => 30.0, _ => 26.0 }).sum::<f32>();
+        let nav: Vec<i32> = rows.iter().enumerate().filter(|(_, r)| r.0 == 0).map(|(i, _)| i as i32).collect();
+        self.menu.acts = rows.iter().map(|r| r.3).collect();
+        let model: Vec<MenuRow> = rows
+            .iter()
+            .map(|r| MenuRow { kind: r.0 as i32, label: r.1.into(), key: r.2.into(), enabled: true })
+            .collect();
+        let m = &self.menu.win;
+        m.set_rows(ModelRc::new(VecModel::from(model)));
+        m.set_nav(ModelRc::new(VecModel::from(nav)));
+        m.set_menu_w(280.0);
+        m.set_menu_h(height);
+        m.set_swatches(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.acc)).collect::<Vec<_>>())));
+        m.set_swatch_bgs(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.bg0)).collect::<Vec<_>>())));
+        m.set_theme_index(self.theme as i32);
+        m.set_hl(-1);
+        m.set_pos(-1);
+        paint(&m.global::<Theme>(), &THEMES[self.theme], &self.cfg.font);
+
+        // the menu's right edge lines up with the right edge of the menu cell
+        let scale = self.ui.window().scale_factor();
+        let x = (self.ui.get_menu_btn_x() + self.ui.get_menu_btn_w() - 280.0).max(0.0);
+        let y = 32.0;
+        let (ox, oy) = match self.hwnd() {
+            Some(h) if cfg!(windows) => platform::client_origin(h),
+            _ => {
+                let p = self.ui.window().position();
+                (p.x, p.y)
+            }
+        };
+        m.window().set_position(slint::PhysicalPosition::new(ox + (x * scale) as i32, oy + (y * scale) as i32));
+        let _ = m.show();
+        if let (Some(popup), Some(owner)) = (hwnd_of(m.window()), self.hwnd()) {
+            if !self.menu.owned {
+                platform::own_popup(popup, owner, || post(Msg::MenuClose));
+                self.menu.owned = true;
+            }
+            platform::activate(popup);
+        }
+        m.invoke_take_keys();
+        self.menu.open = true;
+        self.menu.opened_at = std::time::Instant::now();
+        self.ui.set_menu_open(true);
+    }
+
+    fn close_menu(&mut self) {
+        if self.menu.open {
+            let _ = self.menu.win.hide();
+            self.menu.open = false;
+            self.menu.closed_at = Some(std::time::Instant::now());
+            self.ui.set_menu_open(false);
         }
     }
 
@@ -320,7 +443,8 @@ impl App {
     }
 
     fn layout(&self) {
-        if let Some(wv) = &self.tabs[self.active].wv {
+        // geometry events can arrive before the first tab exists
+        if let Some(wv) = self.tabs.get(self.active).and_then(|t| t.wv.as_ref()) {
             let _ = wv.set_bounds(self.content_rect());
         }
     }
@@ -378,21 +502,9 @@ impl App {
 
     fn apply_theme(&mut self) {
         let p = &THEMES[self.theme];
-        let g = self.ui.global::<Theme>();
-        g.set_bg0(theme::color(p.bg0));
-        g.set_bg1(theme::color(p.bg1));
-        g.set_bg2(theme::color(p.bg2));
-        g.set_bg3(theme::color(p.bg3));
-        g.set_fg(theme::color(p.fg));
-        g.set_acc(theme::color(p.acc));
-        g.set_mid(theme::color(p.mid));
-        g.set_dim(theme::color(p.dim));
-        g.set_ok(theme::color(p.ok));
-        g.set_info(theme::color(p.info));
-        g.set_warn(theme::color(p.warn));
-        g.set_bad(theme::color(p.bad));
-        g.set_name(p.short.into());
-        g.set_font(self.cfg.font.clone().into());
+        paint(&self.ui.global::<Theme>(), p, &self.cfg.font);
+        paint(&self.menu.win.global::<Theme>(), p, &self.cfg.font);
+        self.menu.win.set_theme_index(self.theme as i32);
         if let Some(h) = self.hwnd() {
             platform::style_frame(h, p.dark, p.bg3);
         }
@@ -401,6 +513,13 @@ impl App {
                 platform::set_web_theme(wv, p.dark);
             }
         }
+    }
+
+    fn set_theme(&mut self, i: usize) {
+        self.theme = i % THEMES.len();
+        self.cfg.theme = THEMES[self.theme].id.to_string();
+        self.cfg.save();
+        self.apply_theme();
     }
 
     fn blocked_page(&self, url: &str, rule: &str) -> String {
@@ -459,16 +578,18 @@ impl App {
                 self.panel = !self.panel;
                 self.ui.set_panel_open(self.panel);
             }
-            Command::Theme => {
-                self.theme = (self.theme + 1) % THEMES.len();
-                self.cfg.theme = THEMES[self.theme].id.to_string();
-                self.cfg.save();
-                self.apply_theme();
+            Command::Theme => self.set_theme((self.theme + 1) % THEMES.len()),
+            Command::Quit => {
+                let _ = slint::quit_event_loop();
             }
         }
     }
 
     pub fn handle(&mut self, m: Msg) {
+        // Until startup has opened the first tab, only window-level events apply.
+        if self.tabs.is_empty() && !matches!(m, Msg::Startup(_) | Msg::Geometry | Msg::Chrome(_) | Msg::Shield(_)) {
+            return;
+        }
         match m {
             Msg::Startup(urls) => {
                 if self.hwnd().is_none() && cfg!(windows) {
@@ -505,7 +626,12 @@ impl App {
             }
             Msg::Chrome(e) => match e {
                 ChromeEvent::MaxHot(on) => self.ui.set_max_hot(on),
-                ChromeEvent::Active(on) => self.ui.set_window_active(on),
+                ChromeEvent::Active(on) => {
+                    self.ui.set_window_active(on);
+                    if on && self.menu.open && self.menu.opened_at.elapsed().as_millis() > 80 {
+                        self.close_menu();
+                    }
+                }
                 ChromeEvent::Maximized(on) => {
                     self.ui.set_zoomed(on);
                     self.update_hitmap();
@@ -522,6 +648,29 @@ impl App {
             Msg::WinClose => {
                 let _ = slint::quit_event_loop();
             }
+            Msg::MenuToggle => {
+                // A click on the menu cell while the menu is open first
+                // deactivates (closes) the menu; do not reopen on that click.
+                let just_closed = self.menu.closed_at.is_some_and(|t| t.elapsed().as_millis() < 250);
+                if self.menu.open {
+                    self.close_menu();
+                } else if !just_closed {
+                    self.open_menu();
+                }
+            }
+            Msg::MenuClose => {
+                if self.menu.opened_at.elapsed().as_millis() > 80 {
+                    self.close_menu();
+                }
+            }
+            Msg::MenuPick(i) => {
+                let act = self.menu.acts.get(i).copied().unwrap_or(MenuAct::Nothing);
+                self.close_menu();
+                if let MenuAct::Run(c) = act {
+                    self.run(c);
+                }
+            }
+            Msg::MenuTheme(i) => self.set_theme(i),
             Msg::Submit(input) => {
                 let sel = self.ui.get_selected().max(0) as usize;
                 let target = self
@@ -549,7 +698,6 @@ impl App {
             Msg::Forward => self.run(Command::Forward),
             Msg::Reload => self.run(Command::Reload),
             Msg::TogglePanel => self.run(Command::Panel),
-            Msg::CycleTheme => self.run(Command::Theme),
             Msg::SetShield(on) => {
                 self.shield.set_enabled(on);
                 self.cfg.shield = on;

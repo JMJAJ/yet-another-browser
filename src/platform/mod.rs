@@ -13,9 +13,13 @@ pub enum ChromeEvent {
 }
 
 #[cfg(windows)]
+mod popup;
+#[cfg(windows)]
 mod titlebar;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use self::popup::{activate, client_origin, own_popup};
 #[cfg(windows)]
 pub use self::titlebar::{install_titlebar, is_maximized, set_hitmap, style_frame, toggle_maximize, HitMap};
 #[cfg(windows)]
@@ -61,6 +65,11 @@ mod fallback {
     pub fn is_maximized(_hwnd: isize) -> bool {
         false
     }
+    pub fn own_popup(_popup: isize, _owner: isize, _on_deactivate: impl Fn() + 'static) {}
+    pub fn client_origin(_hwnd: isize) -> (i32, i32) {
+        (0, 0)
+    }
+    pub fn activate(_hwnd: isize) {}
 }
 #[cfg(not(windows))]
 pub use fallback::*;

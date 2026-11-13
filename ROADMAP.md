@@ -33,9 +33,11 @@ permissions, context menus, zoom, audio) are built after the engine switch,
 so they are written once.
 
 ### M1: chrome that does not depend on the engine
-- [ ] Owned popup windows (borderless, positioned under a cell, close on Esc,
+- [x] Owned popup windows (borderless, positioned under a cell, close on Esc,
       outside click and focus loss): the base for menus, cards and toasts.
-- [ ] Main menu (≡) with inline zoom and theme rows; theme cell moves into it.
+      Non-activating variant for cards and toasts still to add.
+- [x] Main menu (≡) with inline theme row; theme cell moved into it.
+      Zoom row lands with zoom in M3; more items join as features land.
 - [ ] Tab states: pinned, audio/muted, trimmed, crashed; hover close glyph;
       middle-click close; hover card after 450 ms.
 - [ ] Tab context menu; close never confirms; toast with reopen; ctrl+shift+t

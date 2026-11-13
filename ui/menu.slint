@@ -1,0 +1,133 @@
+// A menu shown in its own borderless, owned window, so it can sit over the
+// page (the page is a native child window that nothing in the main window
+// can be drawn over). Rows: 0 = item, 1 = separator, 2 = theme swatches.
+
+import { Theme } from "theme.slint";
+
+export struct MenuRow { kind: int, label: string, key: string, enabled: bool }
+
+export component MenuWindow inherits Window {
+    no-frame: true;
+    in property <[MenuRow]> rows;
+    in property <length> menu-w: 280px;
+    in property <length> menu-h: 120px;
+    in property <[color]> swatches;
+    // each theme's own background, so a swatch previews the pair
+    in property <[color]> swatch-bgs;
+    in property <int> theme-index;
+    in-out property <int> hl: -1;
+    callback pick(int);
+    callback pick-theme(int);
+    callback dismiss();
+    width: root.menu-w;
+    height: root.menu-h;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+
+    // Rust calls this after showing the window so arrows/enter/esc work.
+    public function take-keys() {
+        keys.focus();
+    }
+
+    // indices of selectable rows, in order (set by Rust)
+    in property <[int]> nav;
+    in-out property <int> pos: -1;
+    function step(dir: int) {
+        if (root.nav.length == 0) {
+            return;
+        }
+        root.pos = root.pos < 0 ? (dir > 0 ? 0 : root.nav.length - 1) : Math.mod(root.pos + dir + root.nav.length, root.nav.length);
+        root.hl = root.nav[root.pos];
+    }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return accept;
+            }
+            if (e.text == Key.DownArrow) {
+                root.step(1);
+                return accept;
+            }
+            if (e.text == Key.UpArrow) {
+                root.step(-1);
+                return accept;
+            }
+            if (e.text == Key.Return && root.hl >= 0) {
+                root.pick(root.hl);
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            border-width: 1px;
+            border-color: Theme.bg3;
+            VerticalLayout {
+                padding-top: 5px;
+                padding-bottom: 5px;
+                padding-left: 1px;
+                padding-right: 1px;
+                for r[i] in root.rows: Rectangle {
+                    height: r.kind == 1 ? 9px : (r.kind == 2 ? 30px : 26px);
+                    background: r.kind == 0 && r.enabled && (ta.has-hover || i == root.hl) ? Theme.bg2 : transparent;
+                    animate background { duration: 80ms; }
+                    if r.kind == 1: Rectangle {
+                        y: 4px;
+                        height: 1px;
+                        background: Theme.bg3;
+                    }
+                    if r.kind != 1: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 16px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: r.label;
+                            color: r.enabled ? Theme.fg : Theme.dim;
+                            vertical-alignment: center;
+                        }
+                        if r.kind == 0: Text {
+                            text: r.key;
+                            color: Theme.mid;
+                            vertical-alignment: center;
+                        }
+                        if r.kind == 2: Rectangle {
+                            width: 4 * 26px + 2px;
+                            HorizontalLayout {
+                                y: (parent.height - 22px) / 2;
+                                height: 22px;
+                                for c[j] in root.swatches: Rectangle {
+                                    width: 26px;
+                                    border-width: 1px;
+                                    border-color: j == root.theme-index ? Theme.acc : Theme.bg3;
+                                    Rectangle {
+                                        x: 2px;
+                                        y: 2px;
+                                        width: parent.width - 4px;
+                                        height: parent.height - 4px;
+                                        background: root.swatch-bgs[j];
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            background: c;
+                                        }
+                                    }
+                                    TouchArea {
+                                        clicked => { root.pick-theme(j); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ta := TouchArea {
+                        enabled: r.kind == 0 && r.enabled;
+                        clicked => { root.pick(i); }
+                    }
+                }
+            }
+        }
+    }
+}

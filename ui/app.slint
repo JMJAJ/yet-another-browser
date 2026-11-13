@@ -1,23 +1,9 @@
 // brxswer chrome. Flat: no radius, no shadow, no gradient, 1px borders,
 // one monospace size, 80ms colour snaps only.
 
-export global Theme {
-    in-out property <color> bg0: #0a0a0a;
-    in-out property <color> bg1: #141414;
-    in-out property <color> bg2: #1e1e1e;
-    in-out property <color> bg3: #282828;
-    in-out property <color> fg: #e8e8e8;
-    in-out property <color> acc: #ffffff;
-    in-out property <color> mid: #a0a0a0;
-    in-out property <color> dim: #606060;
-    // muted semantic tones: state only, never decoration
-    in-out property <color> ok: #8fa68b;
-    in-out property <color> info: #8597aa;
-    in-out property <color> warn: #b5a07a;
-    in-out property <color> bad: #bc8888;
-    in-out property <string> name: "eclipse";
-    in-out property <string> font: "Consolas";
-}
+import { Theme } from "theme.slint";
+import { MenuWindow, MenuRow } from "menu.slint";
+export { Theme, MenuWindow, MenuRow }
 
 export struct TabItem { label: string, active: bool, loading: bool }
 export struct LayerRow { letter: string, label: string, count: string }
@@ -56,6 +42,7 @@ component Cell inherits Rectangle {
 component IconCell inherits Rectangle {
     in property <string> commands;
     in property <bool> enabled: true;
+    out property <bool> hovered: ta.has-hover;
     callback clicked;
     width: 32px;
     background: ta.has-hover && root.enabled ? Theme.bg1 : transparent;
@@ -175,6 +162,7 @@ export component AppWindow inherits Window {
     in property <bool> zoomed;
     in property <bool> window-active: true;
     in property <bool> max-hot;
+    in property <bool> menu-open;
 
     // ---------------------------------------------------------- events out
     callback submit(string);
@@ -185,7 +173,6 @@ export component AppWindow inherits Window {
     callback forward();
     callback reload();
     callback toggle-panel();
-    callback cycle-theme();
     callback set-shield(bool);
     callback page-focus();
     callback complete(int);
@@ -194,6 +181,7 @@ export component AppWindow inherits Window {
     callback win-minimize();
     callback win-maximize();
     callback win-close();
+    callback menu-toggle();
 
     // ----------------------------------------------------------- geometry
     property <length> bar-h: 33px;
@@ -217,6 +205,8 @@ export component AppWindow inherits Window {
     out property <length> drag2-w: drag2.width;
     out property <length> max-x: max-btn.absolute-position.x;
     out property <length> max-w: max-btn.width;
+    out property <length> menu-btn-x: menu-btn.absolute-position.x;
+    out property <length> menu-btn-w: menu-btn.width;
     changed drag1-x => { root.geometry-changed(); }
     changed drag2-x => { root.geometry-changed(); }
     changed drag2-w => { root.geometry-changed(); }
@@ -384,11 +374,10 @@ export component AppWindow inherits Window {
                         clicked => { root.toggle-panel(); }
                     }
                 }
-                Rule { width: 1px; }
-                Cell {
-                    text: Theme.name;
-                    fg: Theme.mid;
-                    clicked => { root.cycle-theme(); }
+                menu-btn := IconCell {
+                    commands: "M2 3.5 L10 3.5 M2 6.5 L10 6.5 M2 9.5 L10 9.5";
+                    background: root.menu-open ? Theme.bg2 : (self.hovered ? Theme.bg1 : transparent);
+                    clicked => { root.menu-toggle(); }
                 }
                 Rule { width: root.controls ? 1px : 0px; }
                 WinButton {
