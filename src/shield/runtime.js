@@ -170,6 +170,40 @@
     } catch (e) {}
   });
 
+  // ---------------------------------------------------------- scrollbars
+  // Slim, square, themed page scrollbars (or none). The app re-applies them
+  // through window.__brxScroll when the theme or the setting changes.
+  var SCROLL = "__SCROLL__";
+  var scrollStyle = null;
+  function scrollCss(c) {
+    if (c.mode === 'hidden') {
+      return 'html{scrollbar-width:none!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+    }
+    if (c.mode !== 'slim') return '';
+    return '::-webkit-scrollbar{width:10px;height:10px;background:transparent}' +
+      '::-webkit-scrollbar-button{display:none;width:0;height:0}' +
+      '::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}' +
+      '::-webkit-scrollbar-thumb{background:' + c.thumb + ';background-clip:padding-box;border:3px solid transparent;border-radius:0;min-height:32px}' +
+      '::-webkit-scrollbar-thumb:hover{background:' + c.hover + ';background-clip:padding-box;border-width:2px}' +
+      '::-webkit-scrollbar-thumb:active{background:' + c.active + ';background-clip:padding-box;border-width:2px}';
+  }
+  function applyScroll(c) {
+    SCROLL = c;
+    if (!scrollStyle) {
+      scrollStyle = document.createElement('style');
+      scrollStyle.setAttribute('data-brx', 'scroll');
+    }
+    scrollStyle.textContent = scrollCss(c);
+    var root = document.documentElement;
+    if (root && scrollStyle.parentNode !== root) root.appendChild(scrollStyle);
+  }
+  try {
+    Object.defineProperty(window, '__brxScroll', { value: function (c) { try { applyScroll(c); } catch (e) {} } });
+    if (document.documentElement) applyScroll(SCROLL);
+    else new MutationObserver(function (m, o) { if (document.documentElement) { o.disconnect(); applyScroll(SCROLL); } }).observe(document, { childList: true });
+    document.addEventListener('DOMContentLoaded', function () { applyScroll(SCROLL); });
+  } catch (e) {}
+
   // ------------------------------------------------------ privacy signals
   try { Object.defineProperty(Navigator.prototype, 'globalPrivacyControl', { get: function () { return true; }, configurable: true }); } catch (e) {}
 

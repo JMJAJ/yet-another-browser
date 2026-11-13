@@ -227,6 +227,8 @@ impl App {
                 heading("APPEARANCE"),
                 text(4, "theme", "theme", "", "alt+t cycles themes from anywhere"),
                 text(2, "font", "ui font", &c.font, "a monospace family installed on this machine"),
+                seg("scrollbars", "page scrollbars", &["slim", "hidden", "system"], &c.scrollbars,
+                    "slim draws a thin square bar in the theme's greys · hidden keeps scrolling but shows no bar"),
                 seg("decorations", "window controls", &["auto", "always", "never"], &c.decorations,
                     "auto shows them on Windows and hides them under tiling compositors (Hyprland, Sway)"),
             ],
@@ -278,6 +280,10 @@ impl App {
         match key {
             "font" if !v.trim().is_empty() => self.cfg.font = v.trim().to_string(),
             "decorations" => self.cfg.decorations = v,
+            "scrollbars" => {
+                self.cfg.scrollbars = v;
+                self.push_scroll();
+            }
             "engine" => {
                 if let Some(e) = ENGINES.iter().find(|e| e.0 == v) {
                     self.cfg.search = e.1.to_string();
@@ -304,7 +310,7 @@ impl App {
             }
             "beacons" => {
                 self.cfg.beacons = v;
-                self.script = shield::runtime_script(&self.shield.rules, &self.cfg.beacons);
+                self.push_scroll();
             }
             "https" => {
                 self.cfg.https = v;

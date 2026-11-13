@@ -187,7 +187,7 @@ fn runtime_script() -> &'static str {
     static SCRIPT: OnceLock<String> = OnceLock::new();
     SCRIPT.get_or_init(|| {
         let cfg = crate::config::Config::load();
-        shield::runtime_script(rules(), &cfg.beacons)
+        shield::runtime_script(rules(), &cfg.beacons, &crate::theme::scroll_json(&cfg.scrollbars, &cfg.theme))
     })
 }
 
@@ -336,6 +336,15 @@ impl Handle {
 
     pub fn reload(&self) {
         self.with(|b| b.reload());
+    }
+
+    pub fn run_script(&self, js: &str) {
+        let js = js.to_string();
+        self.with(move |b| {
+            if let Some(f) = b.main_frame() {
+                f.execute_java_script(Some(&s(&js)), Some(&s("brx://scroll")), 0);
+            }
+        });
     }
 
     pub fn stop(&self) {

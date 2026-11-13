@@ -24,6 +24,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use wry::dpi::{LogicalPosition, LogicalSize};
+#[cfg_attr(not(feature = "engine-cef"), allow(unused_imports))]
 use crate::engine::{self, Kind, Page};
 use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebViewBuilder};
 
@@ -170,6 +171,7 @@ pub enum Msg {
     Crashed(u64, bool),
     Tick,
     /// real loading progress, 0..1 (engines that report it)
+    #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     Progress(u64, f32),
     PaletteEdited(String),
     PaletteRun(usize),
@@ -307,6 +309,7 @@ pub struct App {
     https: Rc<Cell<bool>>,
     titlebar_ok: bool,
     narrow: bool,
+    #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     engine: Kind,
     trace: bool,
     /// tab ids, most recently used first (for "closing a tab focuses: last used")
@@ -385,7 +388,7 @@ fn html_escape(s: &str) -> String {
 
 impl App {
     pub fn new(ui: AppWindow, cfg: Config, shield: Rc<Shield>) -> App {
-        let script = shield::runtime_script(&shield.rules, &cfg.beacons);
+        let script = shield::runtime_script(&shield.rules, &cfg.beacons, &theme::scroll_json(&cfg.scrollbars, &cfg.theme));
         // ephemeral windows keep their engine data in a throwaway folder
         let data = if cfg.ephemeral {
             std::env::temp_dir().join(format!("brxswer-eph-{}", std::process::id()))
@@ -449,6 +452,7 @@ impl App {
         }
     }
 
+    #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     pub fn set_engine(&mut self, k: Kind) {
         self.engine = k;
     }
@@ -696,6 +700,19 @@ impl App {
         self.cfg.theme = THEMES[self.theme].id.to_string();
         self.cfg.save();
         self.apply_theme();
+        self.push_scroll();
+    }
+
+    /// Re-theme page scrollbars in every open page and in pages to come.
+    fn push_scroll(&mut self) {
+        let json = theme::scroll_json(&self.cfg.scrollbars, &self.cfg.theme);
+        self.script = shield::runtime_script(&self.shield.rules, &self.cfg.beacons, &json);
+        let js = format!("window.__brxScroll && window.__brxScroll({json})");
+        for t in &self.tabs {
+            if let Some(wv) = &t.wv {
+                wv.run_script(&js);
+            }
+        }
     }
 
     fn blocked_page(&self, url: &str, rule: &str) -> String {
@@ -1010,6 +1027,11 @@ impl App {
                     let t = &mut self.tabs[i];
                     t.loading = false;
                     t.strips.set(0);
+                    // a page whose renderer started under an older theme catches up
+                    if let Some(wv) = &t.wv {
+                        let json = theme::scroll_json(&self.cfg.scrollbars, &self.cfg.theme);
+                        wv.run_script(&format!("window.__brxScroll && window.__brxScroll({json})"));
+                    }
                     if url.starts_with("http") {
                         t.url = url.clone();
                         let title = t.title.clone();

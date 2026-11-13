@@ -97,6 +97,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.show()?;
     let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     APP.with(|a| {
+        #[allow(unused_mut)]
         let mut app = app::App::new(ui.clone_strong(), cfg, shield);
         #[cfg(feature = "engine-cef")]
         if cef_on {

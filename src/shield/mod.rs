@@ -183,7 +183,8 @@ impl Ledger {
 const RUNTIME_JS: &str = include_str!("runtime.js");
 
 /// Builds the document-start script injected into every frame.
-pub fn runtime_script(rules: &Rules, beacon_mode: &str) -> String {
+/// `scroll` is the page-scrollbar config as JSON (see `theme::scroll_json`).
+pub fn runtime_script(rules: &Rules, beacon_mode: &str, scroll: &str) -> String {
     let domains = serde_json::to_string(&rules.domain_list()).unwrap_or_else(|_| "[]".into());
     let host_paths = serde_json::to_string(rules.host_path_list()).unwrap_or_else(|_| "[]".into());
     let contains = serde_json::to_string(lists::PATH_CONTAINS).unwrap_or_else(|_| "[]".into());
@@ -195,6 +196,7 @@ pub fn runtime_script(rules: &Rules, beacon_mode: &str) -> String {
         .replace("\"__PATH_CONTAINS__\"", &contains)
         .replace("\"__PATH_SUFFIX__\"", &suffix)
         .replace("__BEACON_MODE__", mode)
+        .replace("\"__SCROLL__\"", scroll)
         // Windows catches shortcuts natively (AcceleratorKeyPressed); other
         // engines need the in-page listener.
         .replace("__KEY_FALLBACK__", if cfg!(windows) { "false" } else { "true" })

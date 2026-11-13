@@ -25,6 +25,7 @@ pub enum Kind {
 impl Kind {
     /// CEF when it is compiled in, unless `BRX_ENGINE=webview2` asks
     /// otherwise (used to compare the two engines).
+    #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     pub fn pick() -> Kind {
         #[cfg(feature = "engine-cef")]
         {
@@ -54,6 +55,17 @@ impl Page {
             }
             #[cfg(feature = "engine-cef")]
             Page::Cef(c) => c.load_html(html),
+        }
+    }
+
+    /// Run script in the page's main frame.
+    pub fn run_script(&self, js: &str) {
+        match self {
+            Page::Wry(w) => {
+                let _ = w.evaluate_script(js);
+            }
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.run_script(js),
         }
     }
 

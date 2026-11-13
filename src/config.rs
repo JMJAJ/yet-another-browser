@@ -28,6 +28,8 @@ pub struct Config {
     pub clear_on_exit: String,
     /// Media with sound may start on its own: block | allow
     pub autoplay: String,
+    /// Page scrollbars: slim (themed) | hidden | system
+    pub scrollbars: String,
     /// Not saved: set for ephemeral windows (`--ephemeral`).
     #[serde(skip)]
     pub ephemeral: bool,
@@ -48,6 +50,7 @@ impl Default for Config {
             https: "off".into(),
             clear_on_exit: "off".into(),
             autoplay: "block".into(),
+            scrollbars: "slim".into(),
             ephemeral: false,
         }
     }

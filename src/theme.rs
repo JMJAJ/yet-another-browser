@@ -49,6 +49,24 @@ pub fn index_of(id: &str) -> usize {
     THEMES.iter().position(|t| t.id == id || t.short == id).unwrap_or(0)
 }
 
+/// Page-scrollbar settings for the runtime script, as JSON. The thumb uses
+/// the theme's greys so it reads on light and dark pages alike.
+pub fn scroll_json(mode: &str, theme: &str) -> String {
+    let p = &THEMES[index_of(theme)];
+    let mode = match mode {
+        "hidden" => "hidden",
+        "system" => "system",
+        _ => "slim",
+    };
+    let hex = |c: u32| format!("#{c:06x}");
+    format!(
+        r#"{{"mode":"{mode}","thumb":"{}99","hover":"{}","active":"{}"}}"#,
+        hex(p.mid),
+        hex(p.mid),
+        hex(if p.dark { p.fg } else { p.dim })
+    )
+}
+
 pub fn color(rgb: u32) -> slint::Color {
     slint::Color::from_rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
