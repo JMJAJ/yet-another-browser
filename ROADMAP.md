@@ -38,11 +38,13 @@ so they are written once.
       Non-activating variant for cards and toasts still to add.
 - [x] Main menu (≡) with inline theme row; theme cell moved into it.
       Zoom row lands with zoom in M3; more items join as features land.
-- [ ] Tab states: pinned, audio/muted, trimmed, crashed; hover close glyph;
+- [x] Tab states: pinned, audio/muted, trimmed, crashed; hover close glyph;
       middle-click close; hover card after 450 ms.
-- [ ] Tab context menu; close never confirms; toast with reopen; ctrl+shift+t
-      stack of 25 with history.
-- [ ] Drag to reorder; strip scroll with ‹ n / n › when tabs overflow.
+- [x] Tab context menu; close never confirms; toast with reopen; ctrl+shift+t
+      stack of 25. (Reopen restores the page, not its back/forward list:
+      neither engine can rebuild navigation history.)
+- [x] Drag to reorder; strip scroll with ‹ n / n › when tabs overflow.
+      (Tear-off into a new window deferred: needs multi-window support.)
 - [ ] Address idle display: host bold, rest grey; tag states tls / http /
       cert / brx / blocked; punycode warning.
 - [ ] Suggestion kinds: go, tab (switch to open tab), hist, find, cmd (>).

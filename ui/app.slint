@@ -124,6 +124,8 @@ component TabCell inherits Rectangle {
         : root.item.pinned ? Theme.fg
         : root.item.trimmed ? Theme.dim : Theme.mid;
     width: row.preferred-width;
+    // Slint skips changed-callbacks for first values, so report at creation too
+    init => { root.geom(self.x, self.width); }
     changed x => { root.geom(self.x, self.width); }
     changed width => { root.geom(self.x, self.width); }
     changed hot => { root.hover(self.hot); }
@@ -414,9 +416,18 @@ export component AppWindow inherits Window {
                             clicked => { root.tab-clicked(i); }
                             close => { root.tab-close(i); }
                             mute => { root.tab-mute(i); }
-                            menu => { root.tab-menu(i); }
-                            hover(on) => { root.tab-hover(i, on); }
-                            drag-move(x) => { root.tab-drag(i, x); }
+                            menu => {
+                                root.tab-geom(i, self.x, self.width);
+                                root.tab-menu(i);
+                            }
+                            hover(on) => {
+                                root.tab-geom(i, self.x, self.width);
+                                root.tab-hover(i, on);
+                            }
+                            drag-move(x) => {
+                                root.tab-geom(i, self.x, self.width);
+                                root.tab-drag(i, x);
+                            }
                             drag-end(x) => { root.tab-drop(i, x); }
                             geom(x, w) => { root.tab-geom(i, x, w); }
                         }

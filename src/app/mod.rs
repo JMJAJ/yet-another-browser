@@ -106,6 +106,7 @@ pub fn combo_from_slint(text: &str, ctrl: bool, alt: bool, shift: bool) -> Optio
 
 // ------------------------------------------------------------------ messages
 
+#[derive(Debug)]
 pub enum Msg {
     Startup(Vec<String>),
     Key(String),
@@ -182,7 +183,11 @@ fn drain() {
         };
         let Some(app) = guard.as_mut() else { return };
         let mut n = 0;
+        let debug = std::env::var_os("BRX_DEBUG").is_some();
         while let Some(m) = QUEUE.with(|q| q.borrow_mut().pop_front()) {
+            if debug && !matches!(m, Msg::Shield(_) | Msg::TabGeom(..)) {
+                eprintln!("[msg] {m:?}");
+            }
             app.handle(m);
             n += 1;
         }
@@ -489,7 +494,6 @@ impl App {
         self.next_id += 1;
         let at = at.min(self.tabs.len()).max(self.tabs.iter().filter(|t| t.pinned).count());
         self.tabs.insert(at, Tab::new(id));
-        self.geoms.clear();
         self.active = at;
         let url = url.or_else(|| (!self.cfg.home.is_empty()).then(|| self.cfg.home.clone()));
         self.show_active();
@@ -515,7 +519,6 @@ impl App {
             Some(urlparts::split(&t.url).map_or(t.url.clone(), |p| p.host.trim_start_matches("www.").to_string()))
         };
         drop(t);
-        self.geoms.clear();
         if self.tabs.is_empty() {
             self.new_tab(None);
         } else {

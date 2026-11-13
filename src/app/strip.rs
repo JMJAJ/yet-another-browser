@@ -123,7 +123,6 @@ impl App {
         self.tabs.insert(at, tab);
         self.tabs[at].pinned = at < pinned_others || (at == pinned_others && was_pinned);
         self.active = self.tabs.iter().position(|t| t.id == active_id).unwrap_or(0);
-        self.geoms.clear();
     }
 
     // ------------------------------------------------------------ tab actions
@@ -153,7 +152,6 @@ impl App {
                 self.tabs.insert(at, t);
                 let keep = if self.active == i { Some(id) } else { active_id };
                 self.active = keep.and_then(|k| self.tabs.iter().position(|x| x.id == k)).unwrap_or(at);
-                self.geoms.clear();
             }
             TabOp::ToggleMute => {
                 let t = &mut self.tabs[i];
@@ -203,7 +201,6 @@ impl App {
             }
         }
         self.active = self.tabs.iter().position(|t| t.id == active_id).unwrap_or(0);
-        self.geoms.clear();
         self.show_active();
         let n = ids.len();
         self.toast(format!("closed {n} tab{}", if n == 1 { "" } else { "s" }), Some(ToastAct::Reopen), Tone::Plain);
