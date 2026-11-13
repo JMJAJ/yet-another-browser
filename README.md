@@ -20,6 +20,22 @@ cargo build --release
 Requirements: Rust 1.92+ (Slint 1.18 MSRV). Windows needs the WebView2 runtime (ships with
 Windows 10/11). Linux needs `webkit2gtk-4.1` and `gtk3` dev packages.
 
+### Bundled Chromium engine (optional)
+
+By default pages render in the system WebView2. To build with bundled
+Chromium (CEF 156) instead:
+
+```bash
+bash scripts/fetch-cef.sh          # one-time: ~175 MB download into .cef/
+cargo build --release --features engine-cef
+```
+
+The CEF wrapper needs `cmake` and `ninja` on PATH (Visual Studio 2022 ships
+ninja under `Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja`). `build.rs`
+copies the engine files next to the exe. `BRX_ENGINE=webview2` switches a
+CEF build back to WebView2 at runtime. Chromium starts on the first page, so
+an empty window costs the same as with WebView2.
+
 Set `BRX_TRACE=1` to print every shield event to stderr (debug builds keep
 a console).
 

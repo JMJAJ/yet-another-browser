@@ -155,7 +155,7 @@ impl App {
         match op {
             TabOp::Reload => {
                 if let Some(wv) = &self.tabs[i].wv {
-                    let _ = wv.reload();
+                    wv.reload();
                 }
             }
             TabOp::Duplicate => {
@@ -178,7 +178,7 @@ impl App {
                 let t = &mut self.tabs[i];
                 t.muted = !t.muted;
                 if let Some(wv) = &t.wv {
-                    platform::set_muted(wv, t.muted);
+                    wv.set_muted(t.muted);
                 }
             }
             TabOp::CopyLink => {
@@ -272,7 +272,7 @@ impl App {
             }
             if let (Some(wv), Some(since)) = (&t.wv, t.hidden_since) {
                 if since.elapsed() >= TRIM_AFTER {
-                    platform::try_suspend(wv);
+                    wv.suspend();
                     t.trimmed = true;
                 }
             }

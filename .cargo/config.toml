@@ -1,0 +1,5 @@
+# CEF binaries (bundled-Chromium engine) live here, outside target/, so
+# `cargo clean` does not re-download them. Fetched by cef-dll-sys's build
+# script on the first `--features engine-cef` build.
+[env]
+CEF_PATH = { value = ".cef", relative = true }

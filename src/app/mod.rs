@@ -24,7 +24,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder};
+use crate::engine::{self, Kind, Page};
+use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebViewBuilder};
 
 #[cfg(windows)]
 use wry::WebViewBuilderExtWindows;
@@ -168,6 +169,8 @@ pub enum Msg {
     Audio(u64, bool),
     Crashed(u64, bool),
     Tick,
+    /// real loading progress, 0..1 (engines that report it)
+    Progress(u64, f32),
     PaletteEdited(String),
     PaletteRun(usize),
     PaletteClose,
@@ -224,7 +227,7 @@ fn drain() {
 
 struct Tab {
     id: u64,
-    wv: Option<WebView>,
+    wv: Option<Page>,
     url: String,
     title: String,
     loading: bool,
@@ -239,6 +242,8 @@ struct Tab {
     hidden_since: Option<std::time::Instant>,
     /// The shield refused this page; the block page is showing.
     blocked: bool,
+    /// Loading progress 0..1 when the engine reports it, else 0.
+    progress: f32,
     /// An internal page (history, settings) shown instead of a web view.
     page: Option<Internal>,
 }
@@ -275,6 +280,7 @@ impl Tab {
             trimmed: false,
             hidden_since: None,
             blocked: false,
+            progress: 0.0,
             page: None,
         }
     }
@@ -301,6 +307,8 @@ pub struct App {
     https: Rc<Cell<bool>>,
     titlebar_ok: bool,
     narrow: bool,
+    engine: Kind,
+    trace: bool,
     /// tab ids, most recently used first (for "closing a tab focuses: last used")
     mru: Vec<u64>,
     sugg_targets: Vec<Target>,
@@ -419,6 +427,8 @@ impl App {
             https,
             titlebar_ok: false,
             narrow: false,
+            engine: Kind::WebView2,
+            trace: std::env::var_os("BRX_TRACE").is_some(),
             mru: Vec::new(),
             sugg_targets: Vec::new(),
             menu: Menu {
@@ -437,6 +447,10 @@ impl App {
             closed: Deque::new(),
             _ticker: ticker,
         }
+    }
+
+    pub fn set_engine(&mut self, k: Kind) {
+        self.engine = k;
     }
 
     fn tab_index(&self, id: u64) -> Option<usize> {
@@ -460,6 +474,27 @@ impl App {
 
     fn create_webview(&mut self, idx: usize, url: &str) -> bool {
         let id = self.tabs[idx].id;
+        #[cfg(feature = "engine-cef")]
+        if self.engine == Kind::Chromium && !engine::cef::ensure_started(self.cfg.ephemeral) {
+            // engine files missing or broken: fall back to the system engine
+            eprintln!("brxswer: bundled Chromium failed to start, using WebView2");
+            self.engine = Kind::WebView2;
+        }
+        #[cfg(feature = "engine-cef")]
+        if self.engine == Kind::Chromium {
+            let Some(parent) = self.hwnd() else { return false };
+            let r = self.content_rect();
+            let scale = self.ui.window().scale_factor() as f64;
+            let p = r.position.to_physical::<i32>(scale);
+            let z = r.size.to_physical::<i32>(scale);
+            let h = engine::cef::Handle::create(id, parent, (p.x, p.y, z.width, z.height), url, self.cfg.ephemeral);
+            if self.tabs[idx].muted {
+                h.set_muted(true);
+            }
+            self.tabs[idx].crashed = false;
+            self.tabs[idx].wv = Some(Page::Cef(h));
+            return true;
+        }
         let strips = self.tabs[idx].strips.clone();
         let nav_shield = self.shield.clone();
         let https = self.https.clone();
@@ -511,7 +546,7 @@ impl App {
             platform::set_muted(&wv, true);
         }
         self.tabs[idx].crashed = false;
-        self.tabs[idx].wv = Some(wv);
+        self.tabs[idx].wv = Some(Page::Wry(wv));
         true
     }
 
@@ -522,9 +557,9 @@ impl App {
         self.tabs[idx].loading = true;
         match &self.tabs[idx].wv {
             Some(wv) => {
-                let _ = wv.load_url(&url);
-                let _ = wv.set_visible(true);
-                let _ = wv.focus();
+                wv.load_url(&url);
+                wv.set_visible(true);
+                wv.focus();
             }
             None => {
                 self.create_webview(idx, &url);
@@ -550,15 +585,15 @@ impl App {
                 t.hidden_since = Some(now);
             }
             if let Some(wv) = &t.wv {
-                let _ = wv.set_visible(on);
-                platform::set_background(wv, !on);
+                wv.set_visible(on);
+                wv.set_background(!on);
             }
         }
         self.layout();
         match &self.tabs[self.active].wv {
             Some(wv) => {
                 self.ui.invoke_blur_address();
-                let _ = wv.focus();
+                wv.focus();
             }
             None => self.focus_address(),
         }
@@ -567,13 +602,13 @@ impl App {
     fn layout(&self) {
         // geometry events can arrive before the first tab exists
         if let Some(wv) = self.tabs.get(self.active).and_then(|t| t.wv.as_ref()) {
-            let _ = wv.set_bounds(self.content_rect());
+            wv.set_bounds(self.content_rect(), self.ui.window().scale_factor() as f64);
         }
     }
 
     fn focus_address(&self) {
         if let Some(wv) = &self.tabs[self.active].wv {
-            let _ = wv.focus_parent();
+            wv.focus_parent();
         }
         self.ui.set_address(self.tabs[self.active].url.clone().into());
         self.ui.invoke_focus_address();
@@ -651,7 +686,7 @@ impl App {
         }
         for t in &self.tabs {
             if let Some(wv) = &t.wv {
-                platform::set_web_theme(wv, p.dark);
+                wv.set_dark(p.dark);
             }
         }
     }
@@ -697,12 +732,12 @@ impl App {
             Command::Jump(i) => self.activate(i.min(self.tabs.len() - 1)),
             Command::Back => {
                 if let Some(wv) = &self.tabs[self.active].wv {
-                    let _ = wv.go_back();
+                    wv.go_back();
                 }
             }
             Command::Forward => {
                 if let Some(wv) = &self.tabs[self.active].wv {
-                    let _ = wv.go_forward();
+                    wv.go_forward();
                 }
             }
             Command::Reload if self.tabs[self.active].wv.is_none() && self.tabs[self.active].crashed => {
@@ -717,9 +752,9 @@ impl App {
                 let t = &self.tabs[self.active];
                 if let Some(wv) = &t.wv {
                     if t.loading {
-                        let _ = wv.evaluate_script("window.stop()");
+                        wv.stop();
                     } else {
-                        let _ = wv.reload();
+                        wv.reload();
                     }
                 }
             }
@@ -947,6 +982,8 @@ impl App {
             Msg::Reload => self.run(Command::Reload),
             Msg::TogglePanel => self.run(Command::Panel),
             Msg::SetShield(on) => {
+                #[cfg(feature = "engine-cef")]
+                engine::cef::set_shield(on);
                 self.shield.set_enabled(on);
                 self.cfg.shield = on;
                 self.cfg.save();
@@ -960,6 +997,7 @@ impl App {
             Msg::LoadStarted(id, url) => {
                 if let Some(i) = self.tab_index(id) {
                     self.tabs[i].loading = true;
+                    self.tabs[i].progress = 0.0;
                     if !url.starts_with("about:") && !url.starts_with("data:") {
                         self.tabs[i].url = url;
                         self.tabs[i].blocked = false;
@@ -989,7 +1027,7 @@ impl App {
             Msg::Redirect(id, url) => {
                 if let Some(i) = self.tab_index(id) {
                     if let Some(wv) = &self.tabs[i].wv {
-                        let _ = wv.load_url(&url);
+                        wv.load_url(&url);
                     }
                 }
             }
@@ -1001,12 +1039,22 @@ impl App {
                     t.loading = false;
                     t.blocked = true;
                     if let Some(wv) = &t.wv {
-                        let _ = wv.load_html(&html);
+                        wv.load_html(&html);
                     }
                 }
             }
             Msg::Ipc(id, body) => self.on_ipc(id, &body),
-            Msg::Shield(ev) => self.ledger.record(&ev),
+            Msg::Shield(ev) => {
+                if self.trace {
+                    eprintln!("[shield] tab{} {} {}{}", ev.tab, ev.layer.letter(), ev.subject, ev.detail);
+                }
+                self.ledger.record(&ev);
+            }
+            Msg::Progress(id, p) => {
+                if let Some(i) = self.tab_index(id) {
+                    self.tabs[i].progress = p;
+                }
+            }
             Msg::WebFocus => {
                 self.ui.invoke_blur_address();
                 self.ui.set_suggestions(ModelRc::default());
@@ -1040,7 +1088,7 @@ impl App {
         self.ui.set_address(t.url.clone().into());
         self.ui.invoke_blur_address();
         if let Some(wv) = &t.wv {
-            let _ = wv.focus();
+            wv.focus();
         }
     }
 
@@ -1179,10 +1227,8 @@ impl App {
             .collect();
         ui.set_recent(ModelRc::new(VecModel::from(recent)));
         ui.set_loading(t.loading);
-        ui.set_progress(if t.loading { 0.35 } else { 1.0 });
-        let (back, fwd) = t.wv.as_ref().map_or((false, false), |wv| {
-            (wv.can_go_back().unwrap_or(false), wv.can_go_forward().unwrap_or(false))
-        });
+        ui.set_progress(if !t.loading { 1.0 } else if t.progress > 0.0 { t.progress } else { 0.35 });
+        let (back, fwd) = t.wv.as_ref().map_or((false, false), |wv| (wv.can_go_back(), wv.can_go_forward()));
         ui.set_can_back(back);
         ui.set_can_forward(fwd);
         let parts = urlparts::split(&t.url);

@@ -145,7 +145,7 @@ pub fn install_transport(wv: &wry::WebView, tab: u64, shield: Rc<Shield>) -> win
     Ok(())
 }
 
-fn combo(vk: u32, ctrl: bool, alt: bool, shift: bool) -> Option<String> {
+pub fn combo(vk: u32, ctrl: bool, alt: bool, shift: bool) -> Option<String> {
     let key = match vk {
         0x30..=0x39 | 0x41..=0x5A => ((vk as u8) as char).to_ascii_lowercase().to_string(),
         0x09 => "Tab".into(),

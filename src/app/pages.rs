@@ -299,6 +299,8 @@ impl App {
                 let on = v == "on";
                 self.shield.set_enabled(on);
                 self.cfg.shield = on;
+                #[cfg(feature = "engine-cef")]
+                engine::cef::set_shield(on);
             }
             "beacons" => {
                 self.cfg.beacons = v;
@@ -307,6 +309,8 @@ impl App {
             "https" => {
                 self.cfg.https = v;
                 self.https.set(self.cfg.https == "upgrade");
+                #[cfg(feature = "engine-cef")]
+                engine::cef::set_https(self.cfg.https == "upgrade");
             }
             "filters" => {
                 let path = crate::config::dir().join("filters.txt");

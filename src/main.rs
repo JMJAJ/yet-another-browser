@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod engine;
 mod omnibox;
 mod platform;
 mod shield;
@@ -15,6 +16,11 @@ use shield::{Rules, Shield};
 use std::rc::Rc;
 
 fn main() -> Result<(), slint::PlatformError> {
+    // CEF runs its helper processes (renderer, GPU, network) from this exe
+    #[cfg(feature = "engine-cef")]
+    if let Some(code) = engine::cef::run_subprocess() {
+        std::process::exit(code);
+    }
     let ephemeral = std::env::args().any(|a| a == "--ephemeral");
     let mut cfg = Config::load();
     cfg.ephemeral = ephemeral;
@@ -23,6 +29,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let wipe = config::dir().join("wipe");
     if !ephemeral && wipe.exists() {
         let _ = std::fs::remove_dir_all(config::dir().join("webdata"));
+        let _ = std::fs::remove_dir_all(config::dir().join("chromium"));
         let _ = std::fs::remove_file(&wipe);
     }
 
@@ -33,13 +40,17 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     rules.load_file(&filters);
     let shield = Rc::new(Shield::new(rules, cfg.shield));
-    let trace = std::env::var_os("BRX_TRACE").is_some();
-    shield::subscribe(move |ev| {
-        if trace {
-            eprintln!("[shield] tab{} {} {}{}", ev.tab, ev.layer.letter(), ev.subject, ev.detail);
-        }
-        post(Msg::Shield(ev))
-    });
+    shield::subscribe(|ev| post(Msg::Shield(ev)));
+
+    // bundled Chromium starts lazily, on the first navigation (see
+    // App::create_webview), so an empty window never waits for it
+    #[cfg(feature = "engine-cef")]
+    let cef_on = engine::Kind::pick() == engine::Kind::Chromium;
+    #[cfg(feature = "engine-cef")]
+    {
+        engine::cef::set_shield(cfg.shield);
+        engine::cef::set_https(cfg.https == "upgrade");
+    }
 
     let ui = AppWindow::new()?;
     ui.on_submit(|s| post(Msg::Submit(s.into())));
@@ -85,7 +96,14 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.show()?;
     let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
-    APP.with(|a| *a.borrow_mut() = Some(app::App::new(ui.clone_strong(), cfg, shield)));
+    APP.with(|a| {
+        let mut app = app::App::new(ui.clone_strong(), cfg, shield);
+        #[cfg(feature = "engine-cef")]
+        if cef_on {
+            app.set_engine(engine::Kind::Chromium);
+        }
+        *a.borrow_mut() = Some(app)
+    });
     post(Msg::Startup(urls));
     slint::run_event_loop()?;
 
@@ -96,6 +114,10 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         a.borrow_mut().take()
     });
+    #[cfg(feature = "engine-cef")]
+    if engine::cef::started() {
+        engine::cef::stop();
+    }
     if ephemeral {
         // nothing from an ephemeral window survives it
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("brxswer-eph-{}", std::process::id())));

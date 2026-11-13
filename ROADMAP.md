@@ -1,12 +1,11 @@
 # brxswer roadmap
 
-The working contract for building brxswer. Claude works through it
-milestone by milestone without asking for approval on each step, and stops
-only at the decision gates listed below.
+The working plan for building brxswer. Work goes milestone by milestone
+without a sign-off on each step, and stops only at the decision gates listed
+below.
 
-Design source of truth: the interactive spec (source in `docs/spec.html`; open it in any browser)
-(https://claude.ai/artifact/MdkniVkdpL5vfe2cEmJJYF), 35 states with how each
-one works and how to build it. Where code and spec disagree, the spec wins
+Design source of truth: the interactive spec in `docs/spec.html` (open it in
+any browser): 35 states with how each one works and how to build it. Where code and spec disagree, the spec wins
 unless a gate says otherwise.
 
 ## North star
@@ -64,24 +63,36 @@ so they are written once.
   shield layers fire on the tracker page.
 
 ### M2: bundled Chromium (CEF)
-- [ ] `Engine` trait in `src/engine/` covering what the app uses today
+- [x] `Engine` trait in `src/engine/` covering what the app uses today
       (create, navigate, history, focus, bounds, visibility, scripts, IPC,
       title/load events, request interception). WebView2 becomes one
       implementation.
-- [ ] CEF implementation via `cef` (tauri-apps/cef-rs): child window in our
+- [x] CEF implementation via `cef` (tauri-apps/cef-rs): child window in our
       HWND, multi-threaded message loop on Windows, subprocess entry at the
       top of `main`.
-- [ ] Transport layer on CEF: `GetResourceRequestHandler` /
+- [x] Transport layer on CEF: `GetResourceRequestHandler` /
       `OnBeforeResourceLoad` for blocking and param stripping, a
       `CefResourceHandler` for fake replies, `Sec-GPC` header.
-- [ ] Runtime script injection in every frame, keyboard shortcuts through
+- [x] Runtime script injection in every frame, keyboard shortcuts through
       `OnPreKeyEvent`, popup handling through `OnBeforePopup`.
-- [ ] Engine telemetry off: no Google API keys, component updater, safe
+- [x] Engine telemetry off: no Google API keys, component updater, safe
       browsing, metrics or crash upload (command-line switches + prefs).
-- [ ] Packaging: CEF binaries fetched by the build helper, laid out next to
-      the exe; release zip.
+- [ ] Packaging: CEF binaries fetched by `scripts/fetch-cef.sh` and staged
+      next to the exe by `build.rs` (done); trimmed release zip (to do).
 - Gate: measure install size, idle RAM with one page, and cold start, and
   report them against WebView2 before making CEF the default.
+  Measured 2026-11-13 (release, same binary, `BRX_ENGINE` switches engines):
+
+  | | WebView2 | bundled Chromium |
+  | --- | --- | --- |
+  | window visible | 106–186 ms | 125–278 ms (engine starts on first page) |
+  | empty window | 14 MB private, 1 process | 14 MB private, 1 process |
+  | tracker test page | 158 MB private, 7 processes | 122 MB private, 6 processes |
+  | Wikipedia article | 258 MB private | 183 MB private |
+  | on disk | 9.6 MB (engine ships with Windows) | 9.7 MB + 425 MB engine (≈375 MB with one locale) |
+
+  Not yet on CEF: audio indicator on tabs (CEF has no playback event
+  without taking over audio output) and page dark mode.
 - Done when: the tracker test page passes on CEF, budgets hold (engine files
   excluded), WebView2 removed or kept as fallback per the gate decision.
 
@@ -118,16 +129,16 @@ lands.
 - Settings › third-party cookies: engine setting, lands with M2 (CEF prefs).
 - Tab tear-off / "move to new window": needs multi-window support.
 
-## How Claude works through this
+## How the work proceeds
 
-Decides alone:
+Decided without a sign-off:
 - Implementation details, file layout, names, refactors, tests.
 - Visual details the spec leaves open, within its rules (flat, 1px, one
   monospace size, ≤ 100 ms snaps, tones only for state).
 - Small dependencies that fit the budgets.
 - Order of tasks inside a milestone.
 
-Asks first (decision gates):
+Needs a sign-off first (decision gates):
 - Changing what the spec says a surface does, or adding a surface it lacks.
 - Anything that breaks a budget, or a dependency over 2 MB in the exe.
 - Changing privacy defaults (what is blocked, kept, or sent).
