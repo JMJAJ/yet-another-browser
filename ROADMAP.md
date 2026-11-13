@@ -58,6 +58,10 @@ so they are written once.
       Ephemeral windows are a separate process with an in-memory profile.
 - Done when: every M1 state in the spec matches the app in screenshots,
   budgets hold, committed.
+- **Done 2026-11-13.** Budget check (release, Windows 10, WebView2):
+  window visible 204–215 ms warm (327 ms on the first cold launch after a
+  build), empty window 9.8 MB private, exe 9.6 MB, 13 tests pass, all five
+  shield layers fire on the tracker page.
 
 ### M2: bundled Chromium (CEF)
 - [ ] `Engine` trait in `src/engine/` covering what the app uses today
