@@ -15,7 +15,16 @@ use shield::{Rules, Shield};
 use std::rc::Rc;
 
 fn main() -> Result<(), slint::PlatformError> {
-    let cfg = Config::load();
+    let ephemeral = std::env::args().any(|a| a == "--ephemeral");
+    let mut cfg = Config::load();
+    cfg.ephemeral = ephemeral;
+    // "clear data on exit: everything" leaves a marker; the engine had its
+    // files open at exit, so the folder is erased here, before it starts
+    let wipe = config::dir().join("wipe");
+    if !ephemeral && wipe.exists() {
+        let _ = std::fs::remove_dir_all(config::dir().join("webdata"));
+        let _ = std::fs::remove_file(&wipe);
+    }
 
     let mut rules = Rules::builtin();
     let filters = config::dir().join("filters.txt");
@@ -58,6 +67,14 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_tab_geom(|i, x, w| post(Msg::TabGeom(i.max(0) as usize, x, w)));
     ui.on_strip_step(|d| post(Msg::StripStep(d)));
     ui.on_strip_wheel(|d| post(Msg::StripWheel(d)));
+    ui.on_hist_search(|q| post(Msg::HistSearch(q.into())));
+    ui.on_hist_open(|i| post(Msg::HistOpen(i.max(0) as usize)));
+    ui.on_hist_forget(|i| post(Msg::HistForget(i.max(0) as usize)));
+    ui.on_hist_clear(|| post(Msg::HistClear));
+    ui.on_set_section_pick(|i| post(Msg::SetSection(i.max(0) as usize)));
+    ui.on_set_value(|k, v| post(Msg::SetValue(k.into(), v.into())));
+    ui.on_set_theme_pick(|i| post(Msg::MenuTheme(i.max(0) as usize)));
+    ui.on_reopen_recent(|i| post(Msg::ReopenRecent(i.max(0) as usize)));
     ui.on_shortcut(|text, ctrl, alt, shift| match app::combo_from_slint(&text, ctrl, alt, shift) {
         Some(c) => {
             post(Msg::Key(c));
@@ -73,6 +90,15 @@ fn main() -> Result<(), slint::PlatformError> {
     slint::run_event_loop()?;
 
     // Drop webviews before the window goes away.
-    APP.with(|a| a.borrow_mut().take());
+    APP.with(|a| {
+        if let Some(app) = a.borrow_mut().as_mut() {
+            app.shutdown();
+        }
+        a.borrow_mut().take()
+    });
+    if ephemeral {
+        // nothing from an ephemeral window survives it
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("brxswer-eph-{}", std::process::id())));
+    }
     Ok(())
 }

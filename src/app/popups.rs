@@ -58,7 +58,7 @@ impl App {
     }
 
     /// Screen position for a point given in the main window's logical px.
-    fn to_screen(&self, x: f32, y: f32) -> slint::PhysicalPosition {
+    pub(super) fn to_screen(&self, x: f32, y: f32) -> slint::PhysicalPosition {
         let s = self.ui.window().scale_factor();
         let (ox, oy) = self.origin();
         slint::PhysicalPosition::new(ox + (x * s) as i32, oy + (y * s) as i32)
@@ -71,11 +71,15 @@ impl App {
             item("new tab", "ctrl+t", MenuAct::Run(Command::NewTab)),
             item("reopen closed tab", "ctrl+shift+t", MenuAct::Run(Command::Reopen)),
             item("close tab", "ctrl+w", MenuAct::Run(Command::CloseTab)),
+            item("new ephemeral window", "ctrl+shift+n", MenuAct::Run(Command::Ephemeral)),
+            sep(),
+            item("command palette", "ctrl+k", MenuAct::Run(Command::Palette)),
+            item("history", "ctrl+h", MenuAct::Run(Command::History)),
             sep(),
             (2, "theme".into(), "", true, MenuAct::Nothing),
             sep(),
+            item("settings", "ctrl+,", MenuAct::Run(Command::Settings)),
             item("shield", "ctrl+b", MenuAct::Run(Command::Panel)),
-            item("next theme", "alt+t", MenuAct::Run(Command::Theme)),
             sep(),
             item("quit", "ctrl+q", MenuAct::Run(Command::Quit)),
         ];

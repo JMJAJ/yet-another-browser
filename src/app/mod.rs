@@ -9,11 +9,14 @@ use crate::omnibox;
 use crate::platform::{self, ChromeEvent};
 use crate::shield::{self, params, urlparts, Layer, Ledger, Shield, ShieldEvent, Verdict};
 use crate::theme::{self, THEMES};
-use crate::{AppWindow, CardWindow, LayerRow, LogRow, MenuRow, MenuWindow, Suggestion, TabItem, Theme, ToastWindow};
+use crate::{AppWindow, CardWindow, PaletteWindow, LayerRow, LogRow, MenuRow, MenuWindow, Suggestion, TabItem, Theme, ToastWindow};
 use std::collections::VecDeque as Deque;
 
+mod commands;
+mod pages;
 mod popups;
 mod strip;
+use pages::{Palette, Visit};
 use popups::{Card, Toast, ToastAct, Tone};
 use strip::TabOp;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -45,6 +48,12 @@ pub enum Command {
     Reopen,
     Mute,
     LastTab,
+    Palette,
+    SetTheme(usize),
+    History,
+    Settings,
+    Ephemeral,
+    CopyLink,
 }
 
 impl Command {
@@ -64,6 +73,10 @@ impl Command {
             "ctrl+shift+t" => Command::Reopen,
             "ctrl+m" => Command::Mute,
             "ctrl+9" => Command::LastTab,
+            "ctrl+k" => Command::Palette,
+            "ctrl+h" => Command::History,
+            "ctrl+," => Command::Settings,
+            "ctrl+shift+n" => Command::Ephemeral,
             _ => {
                 let d = combo.strip_prefix("ctrl+")?;
                 let n: usize = d.parse().ok().filter(|n| (1..=9).contains(n))?;
@@ -88,7 +101,7 @@ pub fn combo_from_slint(text: &str, ctrl: bool, alt: bool, shift: bool) -> Optio
     } else if (c as u32) < 0x20 && ctrl {
         // some platforms deliver ctrl+letter as a control character
         (((c as u8) + 0x60) as char).to_string()
-    } else if c.is_ascii_alphanumeric() {
+    } else if c.is_ascii_alphanumeric() || c == ',' {
         c.to_ascii_lowercase().to_string()
     } else {
         return None;
@@ -155,6 +168,16 @@ pub enum Msg {
     Audio(u64, bool),
     Crashed(u64, bool),
     Tick,
+    PaletteEdited(String),
+    PaletteRun(usize),
+    PaletteClose,
+    HistSearch(String),
+    HistOpen(usize),
+    HistForget(usize),
+    HistClear,
+    SetSection(usize),
+    SetValue(String, String),
+    ReopenRecent(usize),
 }
 
 thread_local! {
@@ -214,6 +237,26 @@ struct Tab {
     /// Put to sleep after being hidden for a while.
     trimmed: bool,
     hidden_since: Option<std::time::Instant>,
+    /// The shield refused this page; the block page is showing.
+    blocked: bool,
+    /// An internal page (history, settings) shown instead of a web view.
+    page: Option<Internal>,
+}
+
+/// Internal pages, drawn by Slint instead of the web engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Internal {
+    History,
+    Settings,
+}
+
+impl Internal {
+    fn url(self) -> &'static str {
+        match self {
+            Internal::History => "brx://history",
+            Internal::Settings => "brx://settings",
+        }
+    }
 }
 
 impl Tab {
@@ -231,6 +274,8 @@ impl Tab {
             crashed: false,
             trimmed: false,
             hidden_since: None,
+            blocked: false,
+            page: None,
         }
     }
 }
@@ -247,8 +292,18 @@ pub struct App {
     next_id: u64,
     theme: usize,
     panel: bool,
-    history: Vec<(String, String)>,
-    sugg_targets: Vec<String>,
+    history: Vec<Visit>,
+    /// history page row -> index into `history` (usize::MAX for day headers)
+    hist_index: Vec<usize>,
+    settings_section: usize,
+    palette: Palette,
+    /// shared with the navigation layer: upgrade http:// to https://
+    https: Rc<Cell<bool>>,
+    titlebar_ok: bool,
+    narrow: bool,
+    /// tab ids, most recently used first (for "closing a tab focuses: last used")
+    mru: Vec<u64>,
+    sugg_targets: Vec<Target>,
     menu: Menu,
     card: Card,
     toast: Toast,
@@ -261,6 +316,14 @@ pub struct App {
     closed: Deque<(String, String)>,
     // kept alive for its 30 s tick
     _ticker: slint::Timer,
+}
+
+/// What picking an address-bar suggestion does.
+#[derive(Clone, Debug)]
+enum Target {
+    Url(String),
+    Tab(u64),
+    Cmd(Command),
 }
 
 /// What a main-menu row does.
@@ -315,7 +378,18 @@ fn html_escape(s: &str) -> String {
 impl App {
     pub fn new(ui: AppWindow, cfg: Config, shield: Rc<Shield>) -> App {
         let script = shield::runtime_script(&shield.rules, &cfg.beacons);
-        let ctx = WebContext::new(Some(crate::config::dir().join("webdata")));
+        // ephemeral windows keep their engine data in a throwaway folder
+        let data = if cfg.ephemeral {
+            std::env::temp_dir().join(format!("brxswer-eph-{}", std::process::id()))
+        } else {
+            crate::config::dir().join("webdata")
+        };
+        let ctx = WebContext::new(Some(data));
+        let pal_win = PaletteWindow::new().expect("palette window");
+        pal_win.on_edited(|q| post(Msg::PaletteEdited(q.into())));
+        pal_win.on_run(|i| post(Msg::PaletteRun(i.max(0) as usize)));
+        pal_win.on_dismiss(|| post(Msg::PaletteClose));
+        let https = Rc::new(Cell::new(cfg.https == "upgrade"));
         let theme = theme::index_of(&cfg.theme);
         let menu_win = MenuWindow::new().expect("menu window");
         menu_win.on_pick(|i| post(Msg::MenuPick(i.max(0) as usize)));
@@ -339,6 +413,13 @@ impl App {
             theme,
             panel: false,
             history: Vec::new(),
+            hist_index: Vec::new(),
+            settings_section: 0,
+            palette: Palette { win: pal_win, owned: false, open: false, opened_at: std::time::Instant::now(), targets: Vec::new() },
+            https,
+            titlebar_ok: false,
+            narrow: false,
+            mru: Vec::new(),
             sugg_targets: Vec::new(),
             menu: Menu {
                 win: menu_win,
@@ -381,6 +462,7 @@ impl App {
         let id = self.tabs[idx].id;
         let strips = self.tabs[idx].strips.clone();
         let nav_shield = self.shield.clone();
+        let https = self.https.clone();
         let rect = self.content_rect();
         let p = &THEMES[self.theme];
         let handle = self.ui.window().window_handle();
@@ -389,7 +471,9 @@ impl App {
             .with_url(url)
             .with_initialization_script_for_main_only(self.script.clone(), false)
             .with_ipc_handler(move |req| post(Msg::Ipc(id, req.into_body())))
-            .with_navigation_handler(move |url| navigation_layer(id, &nav_shield, &strips, &url))
+            .with_navigation_handler(move |url| navigation_layer(id, &nav_shield, &strips, https.get(), &url))
+            .with_incognito(self.cfg.ephemeral)
+            .with_autoplay(self.cfg.autoplay == "allow")
             .with_new_window_req_handler(move |url, _| {
                 post(Msg::OpenTab(url));
                 NewWindowResponse::Deny
@@ -404,7 +488,11 @@ impl App {
             .with_focused(true);
         #[cfg(windows)]
         let builder = builder
-            .with_additional_browser_args(platform::BROWSER_ARGS)
+            .with_additional_browser_args(if self.cfg.autoplay == "allow" {
+                format!("{} --autoplay-policy=no-user-gesture-required", platform::BROWSER_ARGS)
+            } else {
+                format!("{} --autoplay-policy=document-user-activation-required", platform::BROWSER_ARGS)
+            })
             .with_theme(if p.dark { wry::Theme::Dark } else { wry::Theme::Light });
         let wv = match builder.build_as_child(&handle) {
             Ok(wv) => wv,
@@ -429,6 +517,7 @@ impl App {
 
     fn navigate_active(&mut self, url: String) {
         let idx = self.active;
+        self.tabs[idx].page = None;
         self.tabs[idx].url = url.clone();
         self.tabs[idx].loading = true;
         match &self.tabs[idx].wv {
@@ -447,6 +536,11 @@ impl App {
 
     fn show_active(&mut self) {
         let now = std::time::Instant::now();
+        if let Some(t) = self.tabs.get(self.active) {
+            let id = t.id;
+            self.mru.retain(|x| *x != id);
+            self.mru.insert(0, id);
+        }
         for (i, t) in self.tabs.iter_mut().enumerate() {
             let on = i == self.active;
             if on {
@@ -522,8 +616,14 @@ impl App {
         if self.tabs.is_empty() {
             self.new_tab(None);
         } else {
+            let closed_active = self.active == idx;
             if self.active >= idx && self.active > 0 {
                 self.active -= 1;
+            }
+            if closed_active && self.cfg.tab_close == "last" {
+                if let Some(i) = self.mru.iter().find_map(|id| self.tabs.iter().position(|t| t.id == *id)) {
+                    self.active = i;
+                }
             }
             self.show_active();
         }
@@ -634,6 +734,12 @@ impl App {
             Command::Reopen => self.reopen(),
             Command::Mute => self.tab_op(TabOp::ToggleMute, self.active),
             Command::LastTab => self.activate(self.tabs.len() - 1),
+            Command::SetTheme(i) => self.set_theme(i),
+            Command::CopyLink => self.tab_op(TabOp::CopyLink, self.active),
+            Command::Palette => self.open_palette(),
+            Command::History => self.open_internal(Internal::History),
+            Command::Settings => self.open_internal(Internal::Settings),
+            Command::Ephemeral => self.spawn_ephemeral(),
         }
     }
 
@@ -652,11 +758,23 @@ impl App {
                     return;
                 }
                 if let Some(h) = self.hwnd() {
-                    let custom = platform::install_titlebar(h, |e| post(Msg::Chrome(e)));
-                    self.ui.set_controls(custom && platform::CUSTOM_TITLEBAR);
+                    self.titlebar_ok = platform::install_titlebar(h, |e| post(Msg::Chrome(e)));
                     self.ui.set_zoomed(platform::is_maximized(h));
                 }
+                self.apply_decorations();
+                self.ui.set_eph(self.cfg.ephemeral);
                 self.apply_theme();
+                let mut urls = urls;
+                if urls.is_empty() && !self.cfg.ephemeral {
+                    match self.cfg.start.as_str() {
+                        "session" => {
+                            let saved = std::fs::read_to_string(Self::session_path()).unwrap_or_default();
+                            urls = serde_json::from_str::<Vec<String>>(&saved).unwrap_or_default();
+                        }
+                        "home" if !self.cfg.home.is_empty() => urls = vec![self.cfg.home.clone()],
+                        _ => {}
+                    }
+                }
                 if urls.is_empty() {
                     self.new_tab(None);
                 } else {
@@ -673,6 +791,9 @@ impl App {
                 }
             }
             Msg::Geometry => {
+                let w = self.ui.window().size().width as f32 / self.ui.window().scale_factor();
+                self.narrow = w < 720.0;
+                self.ui.set_narrow(self.narrow);
                 self.layout();
                 self.update_hitmap();
             }
@@ -743,26 +864,80 @@ impl App {
             Msg::Audio(id, on) => self.on_audio(id, on),
             Msg::Crashed(id, all) => self.on_crash(id, all),
             Msg::Tick => self.tick(),
-            Msg::MenuTheme(i) => self.set_theme(i),
+            Msg::PaletteEdited(q) => self.fill_palette(&q),
+            Msg::PaletteRun(i) => self.palette_run(i),
+            Msg::PaletteClose => {
+                if self.palette.opened_at.elapsed().as_millis() > 80 {
+                    self.close_palette();
+                }
+            }
+            Msg::HistSearch(q) => self.fill_history(&q),
+            Msg::HistOpen(i) => self.hist_open(i),
+            Msg::HistForget(i) => self.hist_forget(i),
+            Msg::HistClear => self.hist_clear(),
+            Msg::SetSection(i) => {
+                self.settings_section = i;
+                self.fill_settings();
+            }
+            Msg::SetValue(k, v) => self.set_value(&k, &v),
+            Msg::ReopenRecent(i) => {
+                if i < self.closed.len() {
+                    if let Some((url, _)) = self.closed.remove(i) {
+                        let t = &self.tabs[self.active];
+                        if t.wv.is_none() && t.url.is_empty() {
+                            self.navigate_active(url);
+                        } else {
+                            self.new_tab(Some(url));
+                        }
+                    }
+                }
+            }
+            Msg::MenuTheme(i) => {
+                self.set_theme(i);
+                if self.tabs[self.active].page == Some(Internal::Settings) {
+                    self.fill_settings();
+                }
+            }
             Msg::Submit(input) => {
                 let sel = self.ui.get_selected().max(0) as usize;
                 let target = self
                     .sugg_targets
                     .get(sel)
                     .cloned()
-                    .or_else(|| omnibox::resolve(&input, &self.cfg.search));
+                    .or_else(|| omnibox::resolve(&input, &self.cfg.search).map(Target::Url));
                 self.sugg_targets.clear();
                 self.ui.set_suggestions(ModelRc::default());
                 self.ui.set_strip_preview(SharedString::new());
-                if let Some(t) = target {
-                    self.tabs[self.active].strips.set(0);
-                    self.navigate_active(t);
+                match target {
+                    Some(Target::Url(t)) => {
+                        self.tabs[self.active].strips.set(0);
+                        self.navigate_active(t);
+                    }
+                    Some(Target::Tab(id)) => {
+                        if let Some(i) = self.tab_index(id) {
+                            self.activate(i);
+                        }
+                    }
+                    Some(Target::Cmd(c)) => {
+                        self.page_focus();
+                        self.run(c);
+                    }
+                    None => {}
                 }
             }
             Msg::Edited(text) => self.update_suggestions(&text),
             Msg::Complete(i) => {
-                if let Some(t) = self.sugg_targets.get(i) {
-                    self.ui.set_address(t.clone().into());
+                let text = match self.sugg_targets.get(i) {
+                    Some(Target::Url(u)) => u.clone(),
+                    Some(Target::Tab(id)) => self.tab_index(*id).map_or(String::new(), |i| self.tabs[i].url.clone()),
+                    Some(Target::Cmd(c)) => {
+                        let label = commands::table().into_iter().find(|n| n.cmd == *c).map_or("", |n| n.label);
+                        format!(">{label}")
+                    }
+                    None => String::new(),
+                };
+                if !text.is_empty() {
+                    self.ui.set_address(text.into());
                 }
             }
             Msg::TabClicked(i) => self.activate(i),
@@ -776,16 +951,7 @@ impl App {
                 self.cfg.shield = on;
                 self.cfg.save();
             }
-            Msg::PageFocus => {
-                self.ui.set_suggestions(ModelRc::default());
-                self.sugg_targets.clear();
-                let t = &self.tabs[self.active];
-                self.ui.set_address(t.url.clone().into());
-                if let Some(wv) = &t.wv {
-                    self.ui.invoke_blur_address();
-                    let _ = wv.focus();
-                }
-            }
+            Msg::PageFocus => self.page_focus(),
             Msg::Title(id, title) => {
                 if let Some(i) = self.tab_index(id) {
                     self.tabs[i].title = title;
@@ -796,6 +962,7 @@ impl App {
                     self.tabs[i].loading = true;
                     if !url.starts_with("about:") && !url.starts_with("data:") {
                         self.tabs[i].url = url;
+                        self.tabs[i].blocked = false;
                     }
                     self.ledger.reset_tab(id);
                 }
@@ -807,8 +974,11 @@ impl App {
                     t.strips.set(0);
                     if url.starts_with("http") {
                         t.url = url.clone();
-                        self.history.retain(|(u, _)| u != &url);
-                        self.history.push((url, t.title.clone()));
+                        let title = t.title.clone();
+                        if !self.cfg.ephemeral {
+                            self.history.retain(|v| v.url != url);
+                            self.history.push(Visit { url, title, at: platform::now_local() });
+                        }
                         if self.history.len() > 500 {
                             self.history.remove(0);
                         }
@@ -829,6 +999,7 @@ impl App {
                     let t = &mut self.tabs[i];
                     t.url = url;
                     t.loading = false;
+                    t.blocked = true;
                     if let Some(wv) = &t.wv {
                         let _ = wv.load_html(&html);
                     }
@@ -862,14 +1033,69 @@ impl App {
         }
     }
 
+    fn page_focus(&mut self) {
+        self.ui.set_suggestions(ModelRc::default());
+        self.sugg_targets.clear();
+        let t = &self.tabs[self.active];
+        self.ui.set_address(t.url.clone().into());
+        self.ui.invoke_blur_address();
+        if let Some(wv) = &t.wv {
+            let _ = wv.focus();
+        }
+    }
+
     fn update_suggestions(&mut self, text: &str) {
-        let s = omnibox::suggest(text, &self.cfg.search, &self.history, self.shield.enabled());
-        self.sugg_targets = s.rows.iter().map(|r| r.target.clone()).collect();
-        let rows: Vec<Suggestion> = s
-            .rows
-            .into_iter()
-            .map(|r| Suggestion { tag: r.tag.into(), text: r.text.into(), note: r.note.into() })
-            .collect();
+        // `>` turns the address bar into a command line
+        if let Some(q) = text.trim_start().strip_prefix('>') {
+            let mut rows = Vec::new();
+            self.sugg_targets.clear();
+            for c in commands::table().into_iter().filter(|c| commands::matches(c.label, q)).take(6) {
+                rows.push(Suggestion { tag: "cmd".into(), text: c.label.into(), note: c.key.into() });
+                self.sugg_targets.push(Target::Cmd(c.cmd));
+            }
+            self.ui.set_suggestions(ModelRc::new(VecModel::from(rows)));
+            self.ui.set_strip_preview(SharedString::new());
+            self.ui.set_strip_note(SharedString::new());
+            return;
+        }
+        let pairs: Vec<(String, String)> = self.history.iter().map(|v| (v.url.clone(), v.title.clone())).collect();
+        let s = omnibox::suggest(text, &self.cfg.search, &pairs, self.shield.enabled());
+        let mut rows: Vec<Suggestion> = Vec::new();
+        self.sugg_targets.clear();
+        let needle = text.trim().to_lowercase();
+        // an open tab beats opening a duplicate: list matches right after "go"
+        let open: Vec<(usize, u64, String, String)> = if needle.is_empty() {
+            Vec::new()
+        } else {
+            self.tabs
+                .iter()
+                .enumerate()
+                .filter(|(i, t)| {
+                    *i != self.active
+                        && !t.url.is_empty()
+                        && (t.url.to_lowercase().contains(&needle) || t.title.to_lowercase().contains(&needle))
+                })
+                .take(3)
+                .map(|(i, t)| (i, t.id, t.title.clone(), t.url.clone()))
+                .collect()
+        };
+        let open_urls: Vec<&str> = open.iter().map(|o| o.3.as_str()).collect();
+        let mut tabs_added = false;
+        for r in s.rows {
+            if r.tag == "hist" && open_urls.contains(&r.target.as_str()) {
+                continue;
+            }
+            if r.tag != "go" && !tabs_added {
+                for (i, id, title, url) in &open {
+                    let host = urlparts::split(url).map_or("", |p| p.host).to_string();
+                    rows.push(Suggestion { tag: "tab".into(), text: format!("{}  {}  — {}", i + 1, title, host).into(), note: "switch".into() });
+                    self.sugg_targets.push(Target::Tab(*id));
+                }
+                tabs_added = true;
+            }
+            rows.push(Suggestion { tag: r.tag.into(), text: r.text.into(), note: r.note.into() });
+            self.sugg_targets.push(Target::Url(r.target));
+        }
         self.ui.set_suggestions(ModelRc::new(VecModel::from(rows)));
         if s.stripped.is_empty() {
             self.ui.set_strip_preview(SharedString::new());
@@ -919,7 +1145,7 @@ impl App {
                     } else {
                         urlparts::split(&tab.url).map_or(tab.url.clone(), |p| p.host.trim_start_matches("www.").to_string())
                     };
-                    let short: String = name.chars().take(24).collect();
+                    let short: String = name.chars().take(if self.narrow { 10 } else { 24 }).collect();
                     format!("{n} {short}")
                 } else {
                     n.to_string()
@@ -938,8 +1164,20 @@ impl App {
             .collect();
         ui.set_tabs(ModelRc::new(VecModel::from(tabs)));
 
-        let blank = t.wv.is_none();
+        let blank = t.wv.is_none() && t.page.is_none();
         ui.set_blank(blank);
+        ui.set_page(match t.page {
+            Some(Internal::History) => 1,
+            Some(Internal::Settings) => 2,
+            None => 0,
+        });
+        let recent: Vec<SharedString> = self
+            .closed
+            .iter()
+            .take(5)
+            .map(|(u, title)| if title.is_empty() { u.as_str().into() } else { title.as_str().into() })
+            .collect();
+        ui.set_recent(ModelRc::new(VecModel::from(recent)));
         ui.set_loading(t.loading);
         ui.set_progress(if t.loading { 0.35 } else { 1.0 });
         let (back, fwd) = t.wv.as_ref().map_or((false, false), |wv| {
@@ -947,18 +1185,33 @@ impl App {
         });
         ui.set_can_back(back);
         ui.set_can_forward(fwd);
-        ui.set_security(
-            if t.url.starts_with("https://") {
-                "tls"
-            } else if t.url.starts_with("http://") {
-                "http"
-            } else {
-                ""
-            }
-            .into(),
-        );
+        let parts = urlparts::split(&t.url);
+        let host = parts.map_or("", |p| p.host);
+        let tag = if t.page.is_some() {
+            "brx"
+        } else if t.blocked {
+            "blocked"
+        } else if t.url.starts_with("https://") {
+            "tls"
+        } else if t.url.starts_with("http://") {
+            "http"
+        } else {
+            ""
+        };
+        ui.set_security(tag.into());
+        // look-alike domains: punycode labels are shown as-is, and flagged
+        ui.set_addr_puny(host.split('.').any(|l| l.starts_with("xn--")));
+        let display = t.page.map_or(t.url.as_str(), |p| p.url());
+        if t.page.is_some() || parts.is_none() {
+            ui.set_addr_host(display.into());
+            ui.set_addr_rest(SharedString::new());
+        } else if let Some(p) = parts {
+            let start = display.find(p.host).map_or(0, |i| i + p.host.len());
+            ui.set_addr_host(p.host.into());
+            ui.set_addr_rest(if self.narrow { SharedString::new() } else { display[start..].into() });
+        }
         if !ui.get_address_focused() {
-            ui.set_address(t.url.clone().into());
+            ui.set_address(display.into());
         }
         let title = if t.title.is_empty() { "brxswer".to_string() } else { format!("{} — brxswer", t.title) };
         ui.set_win_title(title.into());
@@ -1022,7 +1275,17 @@ fn group(n: u64) -> String {
 
 /// Navigation layer. Runs synchronously inside the engine's
 /// navigation-starting event: decide, emit, post — never touch app state.
-fn navigation_layer(tab: u64, shield: &Shield, strips: &Cell<u8>, url: &str) -> bool {
+fn navigation_layer(tab: u64, shield: &Shield, strips: &Cell<u8>, https: bool, url: &str) -> bool {
+    if https {
+        if let Some(rest) = url.strip_prefix("http://") {
+            let host = urlparts::split(url).map_or("", |p| p.host);
+            let local = host == "localhost" || host.ends_with(".localhost") || host.ends_with(".test") || host.parse::<std::net::IpAddr>().is_ok();
+            if !local {
+                post(Msg::Redirect(tab, format!("https://{rest}")));
+                return false;
+            }
+        }
+    }
     if !shield.enabled() || !(url.starts_with("http://") || url.starts_with("https://")) {
         return true;
     }

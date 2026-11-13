@@ -36,6 +36,62 @@ pub use self::titlebar::{install_titlebar, is_maximized, set_hitmap, style_frame
 #[cfg(windows)]
 pub use self::windows::*;
 
+/// Local wall-clock time of an event (history entries).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+}
+
+impl Stamp {
+    fn days(&self) -> i64 {
+        // days since 1970-01-01 (proleptic Gregorian), Howard Hinnant's algorithm
+        let (y, m) = if self.month <= 2 { (self.year as i64 - 1, self.month as i64 + 9) } else { (self.year as i64, self.month as i64 - 3) };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * m + 2) / 5 + self.day as i64 - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146097 + doe - 719468
+    }
+
+    pub fn day_label(&self, today: &Stamp) -> String {
+        const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+        const DAYS: [&str; 7] = ["thursday", "friday", "saturday", "sunday", "monday", "tuesday", "wednesday"];
+        match today.days() - self.days() {
+            0 => "today".into(),
+            1 => "yesterday".into(),
+            _ => format!("{} {} {}", DAYS[self.days().rem_euclid(7) as usize], self.day, MONTHS[(self.month as usize).saturating_sub(1) % 12]),
+        }
+    }
+}
+
+#[cfg(windows)]
+pub fn now_local() -> Stamp {
+    let t = unsafe { ::windows::Win32::System::SystemInformation::GetLocalTime() };
+    Stamp { year: t.wYear as i32, month: t.wMonth as u32, day: t.wDay as u32, hour: t.wHour as u32, minute: t.wMinute as u32 }
+}
+
+#[cfg(not(windows))]
+pub fn now_local() -> Stamp {
+    // UTC: good enough until a time-zone source is wired in
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = (yoe + era * 400 + if m <= 2 { 1 } else { 0 }) as i32;
+    Stamp { year: y, month: m, day: d, hour: (rem / 3600) as u32, minute: ((rem % 3600) / 60) as u32 }
+}
+
 /// Whether the bar draws its own window controls.
 pub const CUSTOM_TITLEBAR: bool = cfg!(windows);
 

@@ -47,19 +47,16 @@ impl App {
         let total = self.content_width();
         let max_scroll = (total - view).max(0.0);
         if let Some(&(x, w)) = self.geoms.get(self.active) {
-            if x < self.strip_scroll {
+            // a tab wider than the strip shows its start, never a clipped title
+            if x < self.strip_scroll || w > view {
                 self.strip_scroll = x;
             } else if x + w > self.strip_scroll + view {
                 self.strip_scroll = x + w - view;
             }
         }
         self.strip_scroll = self.strip_scroll.clamp(0.0, max_scroll);
-        let n = self.tabs.len().min(self.geoms.len());
-        let left = self.geoms[..n].iter().filter(|g| g.0 + g.1 / 2.0 < self.strip_scroll).count();
-        let right = self.geoms[..n].iter().filter(|g| g.0 + g.1 / 2.0 > self.strip_scroll + view).count();
-        self.ui.set_strip_scroll(self.strip_scroll);
-        self.ui.set_hidden_left(left as i32);
-        self.ui.set_hidden_right(right as i32);
+        let total = self.content_width();
+        self.publish_strip(view, total);
     }
 
     pub(super) fn strip_step(&mut self, dir: i32) {
@@ -77,16 +74,40 @@ impl App {
         self.update_strip_free();
     }
 
+    /// Snap the scroll to a cell edge, then report which cells are wholly in
+    /// view, how wide they are together, and how many are hidden each side.
+    fn publish_strip(&mut self, view: f32, total: f32) {
+        let n = self.tabs.len().min(self.geoms.len());
+        let cells = &self.geoms[..n];
+        if total <= view + 0.5 {
+            self.strip_scroll = 0.0;
+            self.ui.set_strip_scroll(0.0);
+            self.ui.set_strip_show(0.0);
+            self.ui.set_hidden_left(0);
+            self.ui.set_hidden_right(0);
+            return;
+        }
+        // start at the first cell that begins at or after the scroll position
+        if let Some(first) = cells.iter().find(|g| g.0 + 0.5 >= self.strip_scroll) {
+            self.strip_scroll = first.0;
+        }
+        let end = self.strip_scroll + view;
+        let shown: Vec<&(f32, f32)> = cells.iter().filter(|g| g.0 + 0.5 >= self.strip_scroll && g.0 + g.1 <= end + 0.5).collect();
+        let show_w = shown.last().map_or(view, |g| g.0 + g.1 - self.strip_scroll);
+        let left = cells.iter().filter(|g| g.0 + 0.5 < self.strip_scroll).count();
+        let right = n - left - shown.len();
+        self.ui.set_strip_scroll(self.strip_scroll);
+        self.ui.set_strip_show(show_w.max(1.0));
+        self.ui.set_hidden_left(left as i32);
+        self.ui.set_hidden_right(right as i32);
+    }
+
     fn update_strip_free(&mut self) {
         let view = self.ui.get_strip_w();
         let max_scroll = (self.content_width() - view).max(0.0);
         self.strip_scroll = self.strip_scroll.clamp(0.0, max_scroll);
-        let n = self.tabs.len().min(self.geoms.len());
-        let left = self.geoms[..n].iter().filter(|g| g.0 + g.1 / 2.0 < self.strip_scroll).count();
-        let right = self.geoms[..n].iter().filter(|g| g.0 + g.1 / 2.0 > self.strip_scroll + view).count();
-        self.ui.set_strip_scroll(self.strip_scroll);
-        self.ui.set_hidden_left(left as i32);
-        self.ui.set_hidden_right(right as i32);
+        let total = self.content_width();
+        self.publish_strip(view, total);
     }
 
     // --------------------------------------------------------------- dragging

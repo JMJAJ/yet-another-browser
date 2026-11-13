@@ -1,0 +1,322 @@
+// Internal pages (brx://history, brx://settings), drawn in the chrome's own
+// style instead of by the web engine.
+
+import { Theme } from "theme.slint";
+
+component Line inherits Rectangle {
+    background: Theme.bg3;
+}
+
+component Btn inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    in property <color> ink: Theme.fg;
+    callback clicked;
+    width: t.preferred-width + 20px;
+    background: root.on ? Theme.acc : (ta.has-hover ? Theme.bg1 : transparent);
+    animate background { duration: 80ms; }
+    t := Text {
+        text: root.text;
+        color: root.on ? Theme.bg0 : root.ink;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// ------------------------------------------------------------------ history
+
+export struct HistRow { kind: int, time: string, title: string, url: string }
+
+export component HistoryView inherits Rectangle {
+    in property <[HistRow]> rows;
+    in property <string> note;
+    in-out property <string> query;
+    callback search(string);
+    callback open(int);
+    callback forget(int);
+    callback clear-all();
+    background: Theme.bg0;
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        Rectangle {
+            height: 32px;
+            HorizontalLayout {
+                Text { text: "search"; color: Theme.mid; vertical-alignment: center; width: 76px; horizontal-alignment: center; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    clip: true;
+                    q := TextInput {
+                        width: parent.width;
+                        height: parent.height;
+                        text <=> root.query;
+                        single-line: true;
+                        vertical-alignment: center;
+                        color: Theme.fg;
+                        selection-background-color: Theme.acc;
+                        selection-foreground-color: Theme.bg0;
+                        text-cursor-width: 1px;
+                        edited => { root.search(self.text); }
+                    }
+                    if root.query == "" && !q.has-focus: Text {
+                        x: 0;
+                        height: parent.height;
+                        text: "title or address";
+                        color: Theme.mid;
+                        vertical-alignment: center;
+                    }
+                }
+                Line { width: 1px; }
+                Btn { text: "clear all"; ink: Theme.bad; clicked => { root.clear-all(); } }
+            }
+        }
+        Line { height: 1px; }
+        Flickable {
+            vertical-stretch: 1;
+            content-height: col.preferred-height;
+            col := VerticalLayout {
+                padding-bottom: 12px;
+                if root.rows.length == 0: Text {
+                    x: 24px;
+                    height: 40px;
+                    text: root.query == "" ? "nothing visited yet" : "nothing matches \u{201c}" + root.query + "\u{201d}";
+                    color: Theme.mid;
+                    vertical-alignment: center;
+                }
+                for r[i] in root.rows: Rectangle {
+                    height: r.kind == 0 ? 34px : 26px;
+                    background: r.kind == 1 && row-ta.has-hover ? Theme.bg1 : transparent;
+                    if r.kind == 0: Text {
+                        x: 24px;
+                        y: 14px;
+                        text: r.title;
+                        color: Theme.mid;
+                    }
+                    row-ta := TouchArea {
+                        enabled: r.kind == 1;
+                        mouse-cursor: pointer;
+                        clicked => { root.open(i); }
+                    }
+                    if r.kind == 1: HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        spacing: 12px;
+                        Text { width: 48px; text: r.time; color: Theme.mid; vertical-alignment: center; }
+                        Text { horizontal-stretch: 1; text: r.title; color: Theme.fg; vertical-alignment: center; overflow: elide; }
+                        Text { width: 280px; text: r.url; color: Theme.mid; vertical-alignment: center; overflow: elide; }
+                        Rectangle {
+                            width: 20px;
+                            opacity: row-ta.has-hover || del.has-hover ? 1 : 0;
+                            background: del.has-hover ? Theme.bg3 : transparent;
+                            Path {
+                                x: 6px; y: (parent.height - 8px) / 2; width: 8px; height: 8px;
+                                viewbox-width: 8; viewbox-height: 8;
+                                commands: "M0 0 L8 8 M8 0 L0 8";
+                                stroke: Theme.mid; stroke-width: 1px; fill: transparent;
+                            }
+                            del := TouchArea { clicked => { root.forget(i); } }
+                        }
+                    }
+                }
+            }
+        }
+        Line { height: 1px; }
+        Rectangle {
+            height: 24px;
+            Text { x: 24px; text: root.note; color: Theme.mid; vertical-alignment: center; height: parent.height; }
+        }
+    }
+}
+
+// ----------------------------------------------------------------- settings
+
+// kind: 0 heading, 1 segmented choice, 2 one-line text, 3 note,
+//       4 theme swatches, 5 multi-line text
+export struct SetRow { kind: int, key: string, label: string, options: [string], value: string, desc: string }
+
+export component SettingsView inherits Rectangle {
+    in property <[string]> sections;
+    in property <int> section;
+    in property <[SetRow]> rows;
+    in property <[string]> theme-names;
+    in property <[color]> theme-acc;
+    in property <[color]> theme-bg;
+    in property <[color]> theme-mid;
+    in property <int> theme-index;
+    callback pick-section(int);
+    callback set(string, string);
+    callback pick-theme(int);
+    background: Theme.bg0;
+    HorizontalLayout {
+        VerticalLayout {
+            width: 180px;
+            padding-top: 12px;
+            alignment: start;
+            for s[i] in root.sections: Rectangle {
+                height: 28px;
+                background: i == root.section ? Theme.acc : (st.has-hover ? Theme.bg1 : transparent);
+                Text {
+                    x: 16px;
+                    text: s;
+                    color: i == root.section ? Theme.bg0 : Theme.mid;
+                    font-weight: i == root.section ? 700 : 400;
+                    vertical-alignment: center;
+                    height: parent.height;
+                }
+                st := TouchArea { clicked => { root.pick-section(i); } }
+            }
+        }
+        Line { width: 1px; }
+        Flickable {
+            horizontal-stretch: 1;
+            content-height: list.preferred-height;
+            list := VerticalLayout {
+                padding: 20px;
+                padding-left: 28px;
+                padding-right: 28px;
+                for r in root.rows: VerticalLayout {
+                    if r.kind == 0: Text {
+                        height: 28px;
+                        text: r.label;
+                        color: Theme.fg;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                        vertical-alignment: top;
+                    }
+                    if r.kind != 0: Line { height: 1px; }
+                    if r.kind != 0: HorizontalLayout {
+                        padding-top: 10px;
+                        padding-bottom: 10px;
+                        spacing: 16px;
+                        Text {
+                            width: 220px;
+                            text: r.label;
+                            color: Theme.fg;
+                            vertical-alignment: r.kind == 5 ? top : center;
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 6px;
+                            alignment: start;
+                            if r.kind == 1: HorizontalLayout {
+                                alignment: start;
+                                Rectangle {
+                                    border-width: 1px;
+                                    border-color: Theme.bg3;
+                                    height: 22px;
+                                    width: segs.preferred-width + 2px;
+                                    segs := HorizontalLayout {
+                                        x: 1px;
+                                        y: 1px;
+                                        height: 20px;
+                                        for o in r.options: Btn {
+                                            text: o;
+                                            on: o == r.value;
+                                            ink: Theme.mid;
+                                            clicked => { root.set(r.key, o); }
+                                        }
+                                    }
+                                }
+                            }
+                            if r.kind == 2: Rectangle {
+                                height: 24px;
+                                max-width: 420px;
+                                border-width: 1px;
+                                border-color: ti.has-focus ? Theme.acc : Theme.bg3;
+                                background: Theme.bg1;
+                                clip: true;
+                                ti := TextInput {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: r.value;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    color: Theme.fg;
+                                    selection-background-color: Theme.acc;
+                                    selection-foreground-color: Theme.bg0;
+                                    text-cursor-width: 1px;
+                                    accepted => { root.set(r.key, self.text); }
+                                    changed has-focus => {
+                                        if (!self.has-focus) {
+                                            root.set(r.key, self.text);
+                                        }
+                                    }
+                                }
+                            }
+                            if r.kind == 5: Rectangle {
+                                height: 120px;
+                                max-width: 520px;
+                                border-width: 1px;
+                                border-color: ta5.has-focus ? Theme.acc : Theme.bg3;
+                                background: Theme.bg1;
+                                clip: true;
+                                ta5 := TextInput {
+                                    x: 8px;
+                                    y: 6px;
+                                    width: parent.width - 16px;
+                                    height: parent.height - 12px;
+                                    text: r.value;
+                                    single-line: false;
+                                    wrap: no-wrap;
+                                    color: Theme.fg;
+                                    selection-background-color: Theme.acc;
+                                    selection-foreground-color: Theme.bg0;
+                                    text-cursor-width: 1px;
+                                    changed has-focus => {
+                                        if (!self.has-focus) {
+                                            root.set(r.key, self.text);
+                                        }
+                                    }
+                                }
+                            }
+                            if r.kind == 3: Text {
+                                text: r.value;
+                                color: Theme.mid;
+                                wrap: word-wrap;
+                            }
+                            if r.kind == 4: HorizontalLayout {
+                                alignment: start;
+                                Rectangle {
+                                    border-width: 1px;
+                                    border-color: Theme.bg3;
+                                    width: sw.preferred-width + 2px;
+                                    height: 52px;
+                                    sw := HorizontalLayout {
+                                        x: 1px;
+                                        y: 1px;
+                                        height: 50px;
+                                        for n[j] in root.theme-names: Rectangle {
+                                            width: max(96px, nm.preferred-width + 24px);
+                                            border-width: j == root.theme-index ? 1px : 0px;
+                                            border-color: Theme.acc;
+                                            background: tt.has-hover ? Theme.bg1 : transparent;
+                                            VerticalLayout {
+                                                padding: 8px;
+                                                spacing: 6px;
+                                                HorizontalLayout {
+                                                    alignment: start;
+                                                    Rectangle { width: 14px; height: 14px; background: root.theme-bg[j]; border-width: 1px; border-color: Theme.bg3; }
+                                                    Rectangle { width: 14px; height: 14px; background: root.theme-mid[j]; }
+                                                    Rectangle { width: 14px; height: 14px; background: root.theme-acc[j]; }
+                                                }
+                                                nm := Text { text: n; color: Theme.fg; }
+                                            }
+                                            tt := TouchArea { clicked => { root.pick-theme(j); } }
+                                        }
+                                    }
+                                }
+                            }
+                            if r.desc != "": Text {
+                                text: r.desc;
+                                color: Theme.mid;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

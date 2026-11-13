@@ -82,3 +82,116 @@ export component ToastWindow inherits Window {
         }
     }
 }
+
+export struct PaletteRow { tag: string, label: string, key: string }
+
+// ctrl+k: run any command, switch to any tab, change any setting by name.
+export component PaletteWindow inherits Window {
+    no-frame: true;
+    in property <[PaletteRow]> rows;
+    in-out property <int> sel;
+    in-out property <string> query;
+    callback edited(string);
+    callback run(int);
+    callback dismiss();
+    width: 600px;
+    height: 34px + max(1, root.rows.length) * 28px + 25px + 2px;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+
+    public function take-keys() {
+        input.focus();
+        input.select-all();
+    }
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.acc;
+    }
+    VerticalLayout {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        Rectangle {
+            height: 32px;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                Text { text: ":"; color: Theme.acc; vertical-alignment: center; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    clip: true;
+                    input := TextInput {
+                        width: parent.width;
+                        height: parent.height;
+                        text <=> root.query;
+                        single-line: true;
+                        vertical-alignment: center;
+                        color: Theme.fg;
+                        selection-background-color: Theme.acc;
+                        selection-foreground-color: Theme.bg0;
+                        text-cursor-width: 1px;
+                        edited => { root.sel = 0; root.edited(self.text); }
+                        accepted => { root.run(root.sel); }
+                        key-pressed(e) => {
+                            if (e.text == Key.Escape) { root.dismiss(); return accept; }
+                            if (e.text == Key.DownArrow) { root.sel = Math.min(root.sel + 1, root.rows.length - 1); return accept; }
+                            if (e.text == Key.UpArrow) { root.sel = Math.max(root.sel - 1, 0); return accept; }
+                            return reject;
+                        }
+                    }
+                    if root.query == "": Text {
+                        x: 0;
+                        height: parent.height;
+                        text: "command, tab or setting";
+                        color: Theme.mid;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.bg3; }
+        if root.rows.length == 0: Rectangle {
+            height: 28px;
+            Text { x: 68px; text: "no command matches"; color: Theme.mid; vertical-alignment: center; }
+        }
+        for r[i] in root.rows: Rectangle {
+            height: 28px;
+            background: i == root.sel ? Theme.bg2 : (rt.has-hover ? Theme.bg1 : transparent);
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Rectangle {
+                    width: 44px;
+                    background: i == root.sel ? Theme.acc : transparent;
+                    Text {
+                        text: r.tag;
+                        color: i == root.sel ? Theme.bg0 : Theme.mid;
+                        font-weight: i == root.sel ? 700 : 400;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+                Text { horizontal-stretch: 1; text: r.label; color: Theme.fg; vertical-alignment: center; overflow: elide; }
+                Text { text: r.key; color: Theme.mid; vertical-alignment: center; }
+            }
+            rt := TouchArea { clicked => { root.run(i); } }
+        }
+        Rectangle { height: 1px; background: Theme.bg3; }
+        Rectangle {
+            height: 24px;
+            HorizontalLayout {
+                padding-left: 12px;
+                spacing: 18px;
+                alignment: start;
+                Text { text: "enter run"; color: Theme.mid; vertical-alignment: center; }
+                Text { text: "up/down pick"; color: Theme.mid; vertical-alignment: center; }
+                Text { text: "esc close"; color: Theme.mid; vertical-alignment: center; }
+            }
+        }
+    }
+}

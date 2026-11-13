@@ -45,13 +45,17 @@ so they are written once.
       neither engine can rebuild navigation history.)
 - [x] Drag to reorder; strip scroll with ‹ n / n › when tabs overflow.
       (Tear-off into a new window deferred: needs multi-window support.)
-- [ ] Address idle display: host bold, rest grey; tag states tls / http /
-      cert / brx / blocked; punycode warning.
-- [ ] Suggestion kinds: go, tab (switch to open tab), hist, find, cmd (>).
-- [ ] Command palette (ctrl+k) sharing one command table with menus and keys.
-- [ ] Internal pages as Slint views: history (search, per-day groups),
+- [x] Address idle display: host bold, rest grey; tag states tls / http /
+      cert / brx / blocked; punycode warning. (cert is set by M3's
+      certificate handling.)
+- [x] Suggestion kinds: go, tab (switch to open tab), hist, find, cmd (>).
+- [x] Command palette (ctrl+k) sharing one command table with menus and keys.
+- [x] Internal pages as Slint views: history (search, per-day groups),
       settings (5 sections, live apply), empty tab with recently closed.
-- [ ] Narrow-window behaviour (< 720 px) and ephemeral window (ctrl+shift+n).
+      Not yet in settings: density, key rebinding, third-party cookies,
+      "focus the opener" after close (see "Deferred" below).
+- [x] Narrow-window behaviour (< 720 px) and ephemeral window (ctrl+shift+n).
+      Ephemeral windows are a separate process with an in-memory profile.
 - Done when: every M1 state in the spec matches the app in screenshots,
   budgets hold, committed.
 
@@ -98,6 +102,17 @@ so they are written once.
       tiling compositors.
 - [ ] "Follow Orrery": read the current Orrery theme and switch live.
 - [ ] Transport layer on Linux through the same CEF backend.
+
+## Deferred
+
+Spec items that need groundwork first; each gets done once its dependency
+lands.
+- Settings › density (roomy 40 px bar): needs the bar height to become a
+  theme variable across the chrome and hit-testing.
+- Settings › key rebinding: needs a keymap layer shared with the engine's
+  shortcut capture (comes with M2's key handling).
+- Settings › third-party cookies: engine setting, lands with M2 (CEF prefs).
+- Tab tear-off / "move to new window": needs multi-window support.
 
 ## How Claude works through this
 

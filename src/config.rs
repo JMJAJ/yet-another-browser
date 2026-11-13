@@ -16,6 +16,21 @@ pub struct Config {
     pub shield: bool,
     /// What to do with beacons to hosts not on the blocklist: scramble | drop
     pub beacons: String,
+    /// Window controls in the bar: auto | always | never
+    pub decorations: String,
+    /// On start: empty | session | home
+    pub start: String,
+    /// After closing a tab, focus: neighbour | last
+    pub tab_close: String,
+    /// Try top-level http:// addresses over https first: upgrade | off
+    pub https: String,
+    /// On exit, erase cookies, cache, storage: off | everything
+    pub clear_on_exit: String,
+    /// Media with sound may start on its own: block | allow
+    pub autoplay: String,
+    /// Not saved: set for ephemeral windows (`--ephemeral`).
+    #[serde(skip)]
+    pub ephemeral: bool,
 }
 
 impl Default for Config {
@@ -27,6 +42,13 @@ impl Default for Config {
             font: if cfg!(windows) { "Consolas".into() } else { "JetBrains Mono".into() },
             shield: true,
             beacons: "scramble".into(),
+            decorations: "auto".into(),
+            start: "empty".into(),
+            tab_close: "neighbour".into(),
+            https: "off".into(),
+            clear_on_exit: "off".into(),
+            autoplay: "block".into(),
+            ephemeral: false,
         }
     }
 }
@@ -54,6 +76,9 @@ impl Config {
     }
 
     pub fn save(&self) {
+        if self.ephemeral {
+            return;
+        }
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(Self::path(), s);
         }

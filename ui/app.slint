@@ -3,8 +3,9 @@
 
 import { Theme } from "theme.slint";
 import { MenuWindow, MenuRow } from "menu.slint";
-import { CardWindow, ToastWindow } from "popups.slint";
-export { Theme, MenuWindow, MenuRow, CardWindow, ToastWindow }
+import { CardWindow, ToastWindow, PaletteWindow, PaletteRow } from "popups.slint";
+import { HistoryView, HistRow, SettingsView, SetRow } from "pages.slint";
+export { Theme, MenuWindow, MenuRow, CardWindow, ToastWindow, PaletteWindow, PaletteRow, HistRow, SetRow }
 
 export struct TabItem { label: string, active: bool, loading: bool, pinned: bool, audio: bool, muted: bool, trimmed: bool, crashed: bool }
 export struct LayerRow { letter: string, label: string, count: string }
@@ -269,6 +270,10 @@ export component AppWindow inherits Window {
     in property <[TabItem]> tabs;
     in-out property <string> address;
     in property <string> security;
+    // idle address display: host in bold, the rest in grey
+    in property <string> addr-host;
+    in property <string> addr-rest;
+    in property <bool> addr-puny;
     in property <bool> can-back;
     in property <bool> can-forward;
     in property <bool> loading;
@@ -287,6 +292,25 @@ export component AppWindow inherits Window {
     in property <string> strip-note;
     in-out property <int> selected;
     in property <bool> blank: true;
+    // internal page on the active tab: 0 none, 1 history, 2 settings
+    in property <int> page;
+    in property <[HistRow]> hist-rows;
+    in property <string> hist-note;
+    in-out property <string> hist-query;
+    in property <[string]> set-sections;
+    in property <int> set-section;
+    in property <[SetRow]> set-rows;
+    in property <[string]> theme-names;
+    in property <[color]> theme-acc;
+    in property <[color]> theme-bg;
+    in property <[color]> theme-mid;
+    in property <int> theme-index;
+    // empty tab
+    in property <[string]> recent;
+    // ephemeral window: nothing is written to disk
+    in property <bool> eph;
+    // under 720px the chrome compacts instead of wrapping
+    in property <bool> narrow;
     // title bar
     in property <bool> controls;
     in property <bool> zoomed;
@@ -297,6 +321,8 @@ export component AppWindow inherits Window {
     in property <int> hidden-left;
     in property <int> hidden-right;
     in property <length> strip-scroll;
+    // width of the whole cells in view; 0 = no clipping needed
+    in property <length> strip-show;
     in property <int> drag-from: -1;
     in property <int> drop-at: -1;
 
@@ -326,6 +352,14 @@ export component AppWindow inherits Window {
     callback tab-drop(int, length);
     callback tab-geom(int, length, length);
     callback strip-step(int);
+    callback hist-search(string);
+    callback hist-open(int);
+    callback hist-forget(int);
+    callback hist-clear();
+    callback set-section-pick(int);
+    callback set-value(string, string);
+    callback set-theme-pick(int);
+    callback reopen-recent(int);
     callback strip-wheel(length);
 
     // ----------------------------------------------------------- geometry
@@ -355,8 +389,7 @@ export component AppWindow inherits Window {
     out property <length> strip-x: strip.absolute-position.x;
     out property <length> strip-w: strip.width;
     // room the tab strip may take before it scrolls
-    property <length> strip-max: max(64px, root.width - right-group.preferred-width - 260px - 34px - 34px
-        - (root.hidden-left > 0 || root.hidden-right > 0 ? 96px : 0px));
+    property <length> center-min: root.narrow ? 180px : 260px;
     changed drag1-x => { root.geometry-changed(); }
     changed drag2-x => { root.geometry-changed(); }
     changed drag2-w => { root.geometry-changed(); }
@@ -390,14 +423,25 @@ export component AppWindow inherits Window {
             width: root.width;
             height: 32px;
             HorizontalLayout {
+                if root.eph: Rectangle {
+                    width: eph-t.preferred-width + 20px;
+                    background: Theme.acc;
+                    eph-t := Text { text: "eph"; color: Theme.bg0; font-weight: 700; vertical-alignment: center; horizontal-alignment: center; }
+                }
+                if root.eph: Rule { width: 1px; }
                 if root.hidden-left > 0: Cell {
                     text: "‹ " + root.hidden-left;
                     fg: Theme.mid;
                     min-w: 48px;
                     clicked => { root.strip-step(-1); }
                 }
+                // the layout gives the strip what is left, up to the width of
+                // its tabs; when that is not enough it scrolls (see strip.rs)
                 strip := Rectangle {
-                    width: min(tabs-row.preferred-width, root.strip-max);
+                    horizontal-stretch: 1;
+                    min-width: 64px;
+                    preferred-width: tabs-row.preferred-width;
+                    max-width: tabs-row.preferred-width;
                     clip: true;
                     TouchArea {
                         scroll-event(e) => {
@@ -405,6 +449,11 @@ export component AppWindow inherits Window {
                             return accept;
                         }
                     }
+                    // only whole cells are ever shown: a half-cut tab reads as a bug
+                    Rectangle {
+                    x: 0;
+                    width: root.strip-show > 0 ? root.strip-show : parent.width;
+                    clip: true;
                     tabs-row := HorizontalLayout {
                         x: -root.strip-scroll;
                         width: self.preferred-width;
@@ -432,6 +481,7 @@ export component AppWindow inherits Window {
                             geom(x, w) => { root.tab-geom(i, x, w); }
                         }
                     }
+                    }
                 }
                 if root.hidden-right > 0: Cell {
                     text: root.hidden-right + " ›";
@@ -454,7 +504,7 @@ export component AppWindow inherits Window {
                 // grows to 600px before the drag gaps get any extra space
                 HorizontalLayout {
                     horizontal-stretch: 6;
-                    min-width: 260px;
+                    min-width: root.center-min;
                     max-width: 600px;
                     IconCell {
                         commands: "M7.5 2.5 L4 6 L7.5 9.5";
@@ -483,7 +533,10 @@ export component AppWindow inherits Window {
                             spacing: 10px;
                             Text {
                                 text: addr.has-focus ? ">" : root.security;
-                                color: addr.has-focus ? Theme.acc : (root.security == "http" ? Theme.warn : Theme.mid);
+                                color: addr.has-focus ? Theme.acc
+                                    : root.addr-puny || root.security == "http" ? Theme.warn
+                                    : root.security == "blocked" || root.security == "cert" ? Theme.bad
+                                    : root.security == "brx" ? Theme.acc : Theme.mid;
                                 vertical-alignment: center;
                             }
                             Rectangle {
@@ -495,7 +548,8 @@ export component AppWindow inherits Window {
                                     text <=> root.address;
                                     single-line: true;
                                     vertical-alignment: center;
-                                    color: Theme.fg;
+                                    // hidden behind the host/path display until focused
+                                    color: self.has-focus || root.addr-host == "" ? Theme.fg : transparent;
                                     selection-background-color: Theme.acc;
                                     selection-foreground-color: Theme.bg0;
                                     text-cursor-width: 1px;
@@ -526,6 +580,31 @@ export component AppWindow inherits Window {
                                         return reject;
                                     }
                                 }
+                                if !addr.has-focus && root.addr-host != "": Rectangle {
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Text {
+                                            text: root.addr-host;
+                                            color: Theme.fg;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: root.addr-rest;
+                                            color: Theme.mid;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: text;
+                                        clicked => {
+                                            addr.focus();
+                                            addr.select-all();
+                                        }
+                                    }
+                                }
                                 if root.address == "" && !addr.has-focus: Text {
                                     x: 0;
                                     width: parent.width;
@@ -554,7 +633,7 @@ export component AppWindow inherits Window {
                             alignment: center;
                             spacing: 8px;
                             Text {
-                                text: root.shield-on ? "shield" : "shield off";
+                                text: root.shield-on ? (root.narrow ? "" : "shield") : "shield off";
                                 color: !root.shield-on ? Theme.bad : (root.panel-open ? Theme.fg : Theme.mid);
                                 vertical-alignment: center;
                             }
@@ -598,6 +677,13 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+        if root.eph: Rectangle {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: 1px;
+            background: Theme.acc;
         }
         Rectangle {
             x: 0;
@@ -703,23 +789,85 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 x: 24px;
                 y: parent.height - self.preferred-height - 24px;
-                width: 640px;
+                width: min(parent.width - 48px, 720px);
                 height: self.preferred-height;
                 spacing: 24px;
                 for col in [
-                    [["ctrl+l", "address"], ["ctrl+t", "new tab"], ["ctrl+w", "close tab"], ["ctrl+1..9", "jump to tab"], ["ctrl+tab", "next tab"]],
-                    [["alt+left", "back"], ["ctrl+r", "reload"], ["ctrl+b", "shield panel"], ["alt+t", "next theme"], ["esc", "focus page"]]
+                    [["ctrl+l", "address"], ["ctrl+k", "commands"], ["ctrl+t", "new tab"], ["ctrl+w", "close tab"], ["ctrl+1..9", "jump to tab"]],
+                    [["ctrl+b", "shield panel"], ["ctrl+h", "history"], ["ctrl+,", "settings"], ["alt+t", "next theme"], ["esc", "focus page"]]
                 ]: VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 10px;
                     Rule { height: 1px; }
                     for row in col: HorizontalLayout {
                         height: 12px;
-                        Text { width: 120px; text: row[0]; color: Theme.acc; }
+                        Text { width: 100px; text: row[0]; color: Theme.acc; }
                         Text { text: row[1]; color: Theme.fg; }
                     }
                 }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+                    alignment: start;
+                    Rule { height: 1px; }
+                    Text {
+                        height: 12px;
+                        text: root.eph ? "ephemeral" : "recently closed";
+                        color: Theme.mid;
+                    }
+                    if root.eph: Text {
+                        text: "nothing from this window is written to disk. closing it erases cookies, cache and history.";
+                        color: Theme.mid;
+                        wrap: word-wrap;
+                    }
+                    if !root.eph && root.recent.length == 0: Text { height: 12px; text: "nothing yet"; color: Theme.mid; }
+                    if !root.eph: VerticalLayout {
+                        spacing: 10px;
+                        for r[k] in root.recent: Rectangle {
+                            height: 12px;
+                            Text {
+                                width: parent.width;
+                                text: r;
+                                color: rr.has-hover ? Theme.acc : Theme.fg;
+                                overflow: elide;
+                            }
+                            rr := TouchArea { mouse-cursor: pointer; clicked => { root.reopen-recent(k); } }
+                        }
+                    }
+                }
             }
+        }
+
+        // ==================================================== internal pages
+        if root.page == 1: HistoryView {
+            x: 0;
+            y: root.content-y;
+            width: root.content-w;
+            height: root.content-h;
+            rows: root.hist-rows;
+            note: root.hist-note;
+            query <=> root.hist-query;
+            search(q) => { root.hist-search(q); }
+            open(i) => { root.hist-open(i); }
+            forget(i) => { root.hist-forget(i); }
+            clear-all => { root.hist-clear(); }
+        }
+        if root.page == 2: SettingsView {
+            x: 0;
+            y: root.content-y;
+            width: root.content-w;
+            height: root.content-h;
+            sections: root.set-sections;
+            section: root.set-section;
+            rows: root.set-rows;
+            theme-names: root.theme-names;
+            theme-acc: root.theme-acc;
+            theme-bg: root.theme-bg;
+            theme-mid: root.theme-mid;
+            theme-index: root.theme-index;
+            pick-section(i) => { root.set-section-pick(i); }
+            set(k, v) => { root.set-value(k, v); }
+            pick-theme(i) => { root.set-theme-pick(i); }
         }
 
         // ============================================================ panel
