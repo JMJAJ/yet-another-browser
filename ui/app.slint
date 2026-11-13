@@ -3,9 +3,11 @@
 
 import { Theme } from "theme.slint";
 import { MenuWindow, MenuRow } from "menu.slint";
-import { CardWindow, ToastWindow, PaletteWindow, PaletteRow } from "popups.slint";
+import { CardWindow, ToastWindow, PaletteWindow, PaletteRow, StatusWindow, SiteInfoWindow, PermRow } from "popups.slint";
 import { HistoryView, HistRow, SettingsView, SetRow } from "pages.slint";
-export { Theme, MenuWindow, MenuRow, CardWindow, ToastWindow, PaletteWindow, PaletteRow, HistRow, SetRow }
+export { Theme, MenuWindow, MenuRow, CardWindow, ToastWindow, PaletteWindow, PaletteRow, HistRow, SetRow, StatusWindow, SiteInfoWindow, PermRow }
+
+export struct DlRow { name: string, status: string, pct: float, state: int, act1: string, act2: string }
 
 export struct TabItem { label: string, active: bool, loading: bool, pinned: bool, audio: bool, muted: bool, trimmed: bool, crashed: bool }
 export struct LayerRow { letter: string, label: string, count: string }
@@ -311,6 +313,26 @@ export component AppWindow inherits Window {
     in property <bool> eph;
     // under 720px the chrome compacts instead of wrapping
     in property <bool> narrow;
+    // find in page
+    in property <bool> find-open;
+    in-out property <string> find-text;
+    in property <string> find-count;
+    in property <bool> find-none;
+    in property <bool> find-case;
+    // downloads
+    in property <bool> dl-open;
+    in property <string> dl-cell;
+    in property <bool> dl-done;
+    in property <[DlRow]> downloads;
+    // permission request strip
+    in property <string> perm-text;
+    // zoom when not 100%
+    in property <string> zoom-cell;
+    // a notification request was refused quietly on this page
+    in property <bool> bell;
+    // fullscreen; reveal = pointer at the top edge
+    in property <bool> fullscreen;
+    in property <bool> reveal;
     // title bar
     in property <bool> controls;
     in property <bool> zoomed;
@@ -360,18 +382,30 @@ export component AppWindow inherits Window {
     callback set-value(string, string);
     callback set-theme-pick(int);
     callback reopen-recent(int);
+    callback find-edited(string);
+    callback find-step(int);
+    callback find-case-toggle();
+    callback find-close();
+    callback dl-toggle();
+    callback dl-act(int, string);
+    callback dl-clear();
+    callback perm-answer(string);
+    callback zoom-reset();
+    callback site-info();
     callback strip-wheel(length);
 
     // ----------------------------------------------------------- geometry
-    property <length> bar-h: 33px;
+    property <length> bar-h: root.fullscreen && !root.reveal ? 0px : 33px;
+    property <length> perm-h: root.perm-text != "" ? 29px : 0px;
+    property <length> find-h: root.find-open ? 29px : 0px;
     property <length> row-h: 29px;
     out property <bool> address-focused: addr.has-focus;
     property <bool> show-sugg: addr.has-focus && root.suggestions.length > 0;
     property <length> sugg-h: root.show-sugg ? (root.suggestions.length + (root.strip-preview != "" ? 1 : 0)) * root.row-h : 0px;
-    property <length> footer-h: (root.blank || root.show-sugg) ? 25px : 0px;
-    out property <length> content-y: root.bar-h + root.sugg-h;
-    out property <length> content-w: root.width - (root.panel-open ? 361px : 0px);
-    out property <length> content-h: max(0px, root.height - root.content-y - root.footer-h);
+    property <length> footer-h: root.fullscreen ? 0px : ((root.blank || root.show-sugg) ? 25px : 0px);
+    out property <length> content-y: root.bar-h + root.sugg-h + root.perm-h;
+    out property <length> content-w: root.width - (root.panel-open || root.dl-open ? 361px : 0px);
+    out property <length> content-h: max(0px, root.height - root.content-y - root.footer-h - root.find-h);
     changed content-y => { root.geometry-changed(); }
     changed content-w => { root.geometry-changed(); }
     changed content-h => { root.geometry-changed(); }
@@ -404,6 +438,17 @@ export component AppWindow inherits Window {
         addr.clear-focus();
     }
 
+    public function focus-find() {
+        find-in.focus();
+        find-in.select-all();
+    }
+    changed find-open => {
+        if (root.find-open) {
+            find-in.focus();
+            find-in.select-all();
+        }
+    }
+
     FocusScope {
         capture-key-pressed(e) => {
             if (e.modifiers.control || e.modifiers.alt || e.text == Key.F5) {
@@ -422,6 +467,7 @@ export component AppWindow inherits Window {
             y: 0;
             width: root.width;
             height: 32px;
+            visible: root.bar-h > 0;
             HorizontalLayout {
                 if root.eph: Rectangle {
                     width: eph-t.preferred-width + 20px;
@@ -531,13 +577,23 @@ export component AppWindow inherits Window {
                             padding-left: 12px;
                             padding-right: 12px;
                             spacing: 10px;
-                            Text {
-                                text: addr.has-focus ? ">" : root.security;
-                                color: addr.has-focus ? Theme.acc
-                                    : root.addr-puny || root.security == "http" ? Theme.warn
-                                    : root.security == "blocked" || root.security == "cert" ? Theme.bad
-                                    : root.security == "brx" ? Theme.acc : Theme.mid;
-                                vertical-alignment: center;
+                            // the connection tag; click it for site info
+                            Rectangle {
+                                width: tagt.preferred-width;
+                                tagt := Text {
+                                    text: addr.has-focus ? ">" : root.security;
+                                    color: addr.has-focus ? Theme.acc
+                                        : root.addr-puny || root.security == "http" ? Theme.warn
+                                        : root.security == "blocked" || root.security == "cert" ? Theme.bad
+                                        : root.security == "brx" ? Theme.acc : Theme.mid;
+                                    vertical-alignment: center;
+                                    height: parent.height;
+                                }
+                                TouchArea {
+                                    enabled: !addr.has-focus && root.security != "" && root.security != "brx";
+                                    mouse-cursor: pointer;
+                                    clicked => { root.site-info(); }
+                                }
                             }
                             Rectangle {
                                 horizontal-stretch: 1;
@@ -624,6 +680,33 @@ export component AppWindow inherits Window {
                     min-width: 16px;
                 }
                 right-group := HorizontalLayout {
+                    if root.bell: Rectangle {
+                        width: 28px;
+                        Path {
+                            x: 8px; y: 10px; width: 12px; height: 12px;
+                            viewbox-width: 12; viewbox-height: 12;
+                            commands: "M3 8.5 L3 5.5 A3 3 0 0 1 9 5.5 L9 8.5 L10 9.5 L2 9.5 Z M5 10.5 L7 10.5 M1.5 1.5 L10.5 10.5";
+                            stroke: Theme.mid; stroke-width: 1px; fill: transparent;
+                        }
+                        TouchArea { clicked => { root.site-info(); } }
+                    }
+                    if root.zoom-cell != "": Rule { width: 1px; }
+                    if root.zoom-cell != "": Cell {
+                        text: root.zoom-cell;
+                        clicked => { root.zoom-reset(); }
+                    }
+                    if root.dl-cell != "": Rule { width: 1px; }
+                    if root.dl-cell != "": Rectangle {
+                        width: dlt.preferred-width + 24px;
+                        background: root.dl-open ? Theme.bg2 : (dlta.has-hover ? Theme.bg1 : transparent);
+                        dlt := Text {
+                            text: root.dl-cell;
+                            color: root.dl-done ? Theme.ok : Theme.fg;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        dlta := TouchArea { clicked => { root.dl-toggle(); } }
+                    }
                     Rule { width: 1px; }
                     Rectangle {
                         width: shield-label.preferred-width + 24px;
@@ -690,6 +773,7 @@ export component AppWindow inherits Window {
             y: 32px;
             width: root.width;
             height: 1px;
+            visible: root.bar-h > 0;
             background: Theme.bg3;
             if root.loading: Rectangle {
                 x: 0;
@@ -834,6 +918,158 @@ export component AppWindow inherits Window {
                             rr := TouchArea { mouse-cursor: pointer; clicked => { root.reopen-recent(k); } }
                         }
                     }
+                }
+            }
+        }
+
+        // ================================================= permission strip
+        if root.perm-text != "": Rectangle {
+            x: 0;
+            y: root.bar-h + root.sugg-h;
+            width: root.width;
+            height: 29px;
+            background: Theme.bg0;
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.bg3; }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Rectangle {
+                    width: 44px;
+                    Rectangle {
+                        width: askt.preferred-width + 12px;
+                        height: 18px;
+                        background: Theme.info.mix(Theme.bg0, 0.2);
+                        askt := Text { text: "ask"; color: Theme.info; vertical-alignment: center; horizontal-alignment: center; }
+                    }
+                }
+                Text { horizontal-stretch: 1; text: root.perm-text; color: Theme.fg; vertical-alignment: center; overflow: elide; }
+                for a in [["block", "bad"], ["allow once", ""], ["allow", "ok"]]: Rectangle {
+                    property <color> tone: a[1] == "bad" ? Theme.bad : (a[1] == "ok" ? Theme.ok : Theme.fg);
+                    width: at.preferred-width + 20px;
+                    y: (parent.height - 21px) / 2;
+                    height: 21px;
+                    border-width: 1px;
+                    border-color: a[1] == "" ? Theme.bg3 : self.tone.mix(Theme.bg3, 0.45);
+                    background: a[1] == "ok" ? self.tone.mix(Theme.bg0, 0.22) : (ata.has-hover ? Theme.bg1 : transparent);
+                    at := Text { text: a[0]; color: parent.tone; vertical-alignment: center; horizontal-alignment: center; }
+                    ata := TouchArea { clicked => { root.perm-answer(a[0]); } }
+                }
+            }
+        }
+
+        // ========================================================= find bar
+        Rectangle {
+            visible: root.find-open;
+            x: 0;
+            y: root.content-y + root.content-h;
+            width: root.content-w;
+            height: 29px;
+            background: Theme.bg0;
+            Rule { y: 0; height: 1px; width: parent.width; }
+            HorizontalLayout {
+                y: 1px;
+                height: 28px;
+                Text { width: 56px; text: "find"; color: Theme.mid; vertical-alignment: center; horizontal-alignment: center; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.bg2;
+                    clip: true;
+                    find-in := TextInput {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text <=> root.find-text;
+                        single-line: true;
+                        vertical-alignment: center;
+                        color: Theme.fg;
+                        selection-background-color: Theme.acc;
+                        selection-foreground-color: Theme.bg0;
+                        text-cursor-width: 1px;
+                        edited => { root.find-edited(self.text); }
+                        accepted => { root.find-step(1); }
+                        key-pressed(e) => {
+                            if (e.text == Key.Escape) { root.find-close(); return accept; }
+                            if (e.text == Key.Return && e.modifiers.shift) { root.find-step(-1); return accept; }
+                            return reject;
+                        }
+                    }
+                }
+                Text { width: 80px; text: root.find-count; color: root.find-none ? Theme.bad : Theme.mid; vertical-alignment: center; horizontal-alignment: center; }
+                Rule { width: 1px; }
+                IconCell { commands: "M7.5 2.5 L4 6 L7.5 9.5"; clicked => { root.find-step(-1); } }
+                IconCell { commands: "M4.5 2.5 L8 6 L4.5 9.5"; clicked => { root.find-step(1); } }
+                Rule { width: 1px; }
+                Cell { text: "aa"; active: root.find-case; clicked => { root.find-case-toggle(); } }
+                Rule { width: 1px; }
+                IconCell { commands: "M3 3 L9 9 M9 3 L3 9"; clicked => { root.find-close(); } }
+            }
+        }
+
+        // ==================================================== downloads panel
+        if root.dl-open: Rectangle {
+            x: root.content-w;
+            y: root.content-y;
+            width: 361px;
+            height: root.content-h + root.find-h;
+            background: Theme.bg0;
+            Rule { x: 0; width: 1px; height: parent.height; }
+            VerticalLayout {
+                x: 1px;
+                width: 360px;
+                Rectangle {
+                    height: 32px;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        Text { horizontal-stretch: 1; text: "DOWNLOADS"; font-weight: 700; letter-spacing: 1px; color: Theme.fg; vertical-alignment: center; }
+                        Rectangle {
+                            width: clt.preferred-width;
+                            clt := Text { text: "clear finished"; color: clta.has-hover ? Theme.fg : Theme.mid; vertical-alignment: center; }
+                            clta := TouchArea { clicked => { root.dl-clear(); } }
+                        }
+                    }
+                }
+                Rule { height: 1px; }
+                if root.downloads.length == 0: Text { x: 12px; height: 40px; text: "nothing downloaded in this session"; color: Theme.mid; vertical-alignment: center; }
+                for d[i] in root.downloads: VerticalLayout {
+                    vertical-stretch: 0;
+                    padding: 10px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 6px;
+                    Text { text: d.name; color: Theme.fg; overflow: elide; }
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.bg3;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * Math.max(0, Math.min(1, d.pct));
+                            height: 1px;
+                            background: d.state == 2 ? Theme.bad : (d.state == 1 ? Theme.ok : Theme.acc);
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        Text { horizontal-stretch: 1; text: d.status; color: d.state == 2 ? Theme.bad : Theme.mid; overflow: elide; }
+                        if d.act1 != "": Rectangle {
+                            width: a1.preferred-width;
+                            a1 := Text { text: d.act1; color: a1a.has-hover ? Theme.fg : Theme.mid; }
+                            a1a := TouchArea { clicked => { root.dl-act(i, d.act1); } }
+                        }
+                        if d.act2 != "": Rectangle {
+                            width: a2.preferred-width;
+                            a2 := Text { text: d.act2; color: a2a.has-hover ? Theme.fg : Theme.mid; }
+                            a2a := TouchArea { clicked => { root.dl-act(i, d.act2); } }
+                        }
+                    }
+                    Rule { height: 1px; }
+                }
+                Rectangle { vertical-stretch: 1; }
+                Rule { height: 1px; }
+                Rectangle {
+                    height: 28px;
+                    Text { x: 12px; text: "saving to your Downloads folder"; color: Theme.mid; vertical-alignment: center; height: parent.height; }
                 }
             }
         }

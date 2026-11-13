@@ -141,6 +141,9 @@ mod fallback {
     pub fn set_clipboard(_text: &str) -> bool {
         false
     }
+    pub fn cursor_client_y(_hwnd: isize) -> Option<i32> {
+        None
+    }
     pub fn client_origin(_hwnd: isize) -> (i32, i32) {
         (0, 0)
     }

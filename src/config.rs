@@ -30,6 +30,10 @@ pub struct Config {
     pub autoplay: String,
     /// Page scrollbars: slim (themed) | hidden | system
     pub scrollbars: String,
+    /// Sites where the shield is paused (requests are counted, not blocked).
+    pub paused: Vec<String>,
+    /// Remembered permission answers, "host|camera" -> allow | block.
+    pub perms: std::collections::BTreeMap<String, String>,
     /// Not saved: set for ephemeral windows (`--ephemeral`).
     #[serde(skip)]
     pub ephemeral: bool,
@@ -51,6 +55,8 @@ impl Default for Config {
             clear_on_exit: "off".into(),
             autoplay: "block".into(),
             scrollbars: "slim".into(),
+            paused: Vec::new(),
+            perms: Default::default(),
             ephemeral: false,
         }
     }

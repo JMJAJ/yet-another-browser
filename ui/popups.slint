@@ -195,3 +195,159 @@ export component PaletteWindow inherits Window {
         }
     }
 }
+
+// Bottom-left status line: where the hovered link goes.
+export component StatusWindow inherits Window {
+    no-frame: true;
+    in property <string> target;
+    in property <string> note;
+    out property <length> want-w: min(720px, row.preferred-width + 2px);
+    width: root.want-w;
+    height: 24px;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+    Rectangle { border-width: 1px; border-color: Theme.bg3; }
+    row := HorizontalLayout {
+        x: 1px;
+        width: parent.width - 2px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        Text { text: root.target; color: root.note != "" ? Theme.acc : Theme.fg; vertical-alignment: center; overflow: elide; }
+        if root.note != "": Text { text: root.note; color: Theme.mid; vertical-alignment: center; }
+    }
+}
+
+export struct PermRow { label: string, key: string, value: string }
+
+// Site info: connection, shield on this site, permissions, storage.
+export component SiteInfoWindow inherits Window {
+    no-frame: true;
+    in property <string> host;
+    in property <string> conn;
+    // chip: 1 ok, 2 warn, 3 bad
+    in property <int> chip-tone;
+    in property <string> chip;
+    in property <bool> paused;
+    in property <string> blocked-line;
+    in property <[PermRow]> perms;
+    in property <string> storage-line;
+    callback set(string, string);
+    callback clear-data();
+    callback details();
+    callback dismiss();
+    width: 380px;
+    height: body.preferred-height + 2px;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+    property <color> chip-c: root.chip-tone == 1 ? Theme.ok : (root.chip-tone == 2 ? Theme.warn : Theme.bad);
+
+    public function take-keys() { keys.focus(); }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { root.dismiss(); return accept; }
+            return reject;
+        }
+        Rectangle { border-width: 1px; border-color: Theme.bg3; }
+        body := VerticalLayout {
+            x: 1px;
+            width: parent.width - 2px;
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                HorizontalLayout {
+                    Text { horizontal-stretch: 1; text: root.host; color: Theme.fg; font-weight: 700; overflow: elide; vertical-alignment: center; }
+                    Rectangle {
+                        width: ct.preferred-width + 12px;
+                        height: 18px;
+                        background: root.chip-c.mix(Theme.bg0, 0.2);
+                        ct := Text { text: root.chip; color: root.chip-c; vertical-alignment: center; horizontal-alignment: center; }
+                    }
+                }
+                Text { text: root.conn; color: Theme.mid; wrap: word-wrap; }
+            }
+            Rectangle { height: 1px; background: Theme.bg3; }
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                HorizontalLayout {
+                    Text { horizontal-stretch: 1; text: "shield on this site"; color: Theme.fg; vertical-alignment: center; }
+                    Rectangle {
+                        border-width: 1px;
+                        border-color: Theme.bg3;
+                        width: s1.preferred-width + 2px;
+                        height: 22px;
+                        s1 := HorizontalLayout {
+                            x: 1px; y: 1px; height: 20px;
+                            for o in ["on", "paused"]: Rectangle {
+                                property <bool> on: (o == "paused") == root.paused;
+                                property <color> tone: o == "on" ? Theme.ok : Theme.warn;
+                                width: ot.preferred-width + 16px;
+                                background: self.on ? self.tone.mix(Theme.bg0, 0.22) : (ota.has-hover ? Theme.bg1 : transparent);
+                                ot := Text { text: o; color: parent.on ? parent.tone : Theme.mid; vertical-alignment: center; horizontal-alignment: center; }
+                                ota := TouchArea { clicked => { root.set("shield", o); } }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    Text { horizontal-stretch: 1; text: root.blocked-line; color: Theme.mid; vertical-alignment: center; }
+                    Rectangle {
+                        width: dt.preferred-width;
+                        dt := Text { text: "details"; color: Theme.acc; vertical-alignment: center; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.details(); } }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.bg3; }
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                for p in root.perms: HorizontalLayout {
+                    Text { horizontal-stretch: 1; text: p.label; color: Theme.fg; vertical-alignment: center; }
+                    Rectangle {
+                        border-width: 1px;
+                        border-color: Theme.bg3;
+                        width: s2.preferred-width + 2px;
+                        height: 22px;
+                        s2 := HorizontalLayout {
+                            x: 1px; y: 1px; height: 20px;
+                            for o in ["ask", "allow", "block"]: Rectangle {
+                                property <bool> on: o == p.value;
+                                property <color> tone: o == "allow" ? Theme.ok : (o == "block" ? Theme.bad : Theme.info);
+                                width: pt.preferred-width + 16px;
+                                background: self.on ? self.tone.mix(Theme.bg0, 0.22) : (pta.has-hover ? Theme.bg1 : transparent);
+                                pt := Text { text: o; color: parent.on ? parent.tone : Theme.mid; vertical-alignment: center; horizontal-alignment: center; }
+                                pta := TouchArea { clicked => { root.set(p.key, o); } }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.bg3; }
+            HorizontalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                Text { horizontal-stretch: 1; text: root.storage-line; color: Theme.mid; vertical-alignment: center; }
+                Rectangle {
+                    width: cd.preferred-width + 20px;
+                    height: 22px;
+                    border-width: 1px;
+                    border-color: cda.has-hover ? Theme.mid : Theme.bg3;
+                    cd := Text { text: "clear site data"; color: Theme.fg; vertical-alignment: center; horizontal-alignment: center; }
+                    cda := TouchArea { clicked => { root.clear-data(); } }
+                }
+            }
+        }
+    }
+}

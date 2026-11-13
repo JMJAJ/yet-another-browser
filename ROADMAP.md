@@ -103,20 +103,27 @@ so they are written once.
   excluded), WebView2 removed or kept as fallback per the gate decision.
 
 ### M3: features that talk to the engine
-- [ ] Find in page bar (tiles at the bottom).
-- [ ] Downloads: bar cell with percent, panel (pause, cancel, retry, open,
+- [x] Find in page bar (tiles at the bottom), match count, case toggle.
+- [x] Downloads: bar cell with percent, panel (pause, cancel, retry, open,
       show in folder), no engine flyout.
-- [ ] Permission strip (camera, mic, location) with per-site memory;
+- [x] Permission strip (camera, mic, location) with per-site memory;
       notifications refused quietly.
-- [ ] Site info popover: connection, shield pause, permissions, storage,
+- [x] Site info popover: connection, shield pause, permissions, storage,
       clear site data.
-- [ ] Page and link context menus (copy clean link first).
-- [ ] Link destination status box with stripped-param preview.
-- [ ] Error pages: offline, certificate (no proceed button, `!` override),
+- [x] Page and link context menus (copy clean link first).
+- [x] Link destination status box with stripped-param preview.
+- [x] Error pages: offline, certificate (no proceed button, `!` override),
       crashed tab; shield block page with "allow this site".
-- [ ] Zoom per site, real loading progress, audio state on tabs.
-- [ ] Shield: per-site pause (counts as "seen"), filters editor in settings.
-- [ ] Fullscreen (F11 + page fullscreen, top-edge reveal).
+- [x] Zoom per site (kept for the session), real loading progress, audio
+      state on tabs (WebView2 only: CEF has no playback event).
+- [x] Shield: per-site pause (counts as "seen"), filters editor in settings.
+- [x] Fullscreen (F11 + page fullscreen, top-edge reveal; the revealed bar
+      pushes the page down rather than overlaying it).
+- **Done 2026-11-13.** Verified in screenshots on bundled Chromium: error
+  page, shield block page, permission strip and remembered answer,
+  download cell and panel. 14 tests pass. Also fixed: engine startup lost
+  browsers created before the CEF context was ready, and a lock held
+  across CEF calls stalled extra startup tabs.
 
 ### M4: Linux / Hyprland
 - [ ] Build and run on Linux; compositor decorations, controls hidden under

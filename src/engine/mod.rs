@@ -58,6 +58,67 @@ impl Page {
         }
     }
 
+    pub fn find(&self, text: &str, forward: bool, case: bool, next: bool) {
+        match self {
+            Page::Wry(w) => {
+                // WebView2 has no find API in wry: window.find, without counts
+                let js = format!(
+                    "window.find({}, {case}, {}, true)",
+                    serde_json::to_string(text).unwrap_or_default(),
+                    !forward
+                );
+                if !text.is_empty() && next || !text.is_empty() {
+                    let _ = w.evaluate_script(&js);
+                }
+            }
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.find(text, forward, case, next),
+        }
+    }
+
+    pub fn stop_find(&self, keep_selection: bool) {
+        match self {
+            Page::Wry(_) => {}
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.stop_find(keep_selection),
+        }
+        let _ = keep_selection;
+    }
+
+    pub fn set_zoom(&self, percent: u32) {
+        match self {
+            Page::Wry(w) => {
+                let _ = w.zoom(percent as f64 / 100.0);
+            }
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.set_zoom(percent),
+        }
+    }
+
+    pub fn devtools(&self) {
+        match self {
+            Page::Wry(_) => {}
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.devtools(),
+        }
+    }
+
+    /// cut / copy / paste / selectall / source
+    pub fn edit(&self, what: &'static str) {
+        match self {
+            Page::Wry(w) => {
+                let js = match what {
+                    "selectall" => "document.execCommand('selectAll')".to_string(),
+                    "source" => return,
+                    other => format!("document.execCommand('{other}')"),
+                };
+                let _ = w.evaluate_script(&js);
+            }
+            #[cfg(feature = "engine-cef")]
+            Page::Cef(c) => c.edit(what),
+        }
+    }
+
     /// Run script in the page's main frame.
     pub fn run_script(&self, js: &str) {
         match self {

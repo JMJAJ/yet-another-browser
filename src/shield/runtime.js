@@ -26,7 +26,12 @@
   function suffixOf(host, s) {
     return host === s || (host.length > s.length && host.slice(-s.length - 1) === '.' + s);
   }
+  var PAUSED_SITE = (window.__brxPaused || []).some(function (h) {
+    var host = location.hostname;
+    return host === h || host.slice(-h.length - 1) === '.' + h;
+  });
   function verdict(raw) {
+    if (PAUSED_SITE) return null;
     var u;
     try { u = new URL(raw, location.href); } catch (e) { return null; }
     if (!/^(https?|wss?):$/.test(u.protocol)) return null;

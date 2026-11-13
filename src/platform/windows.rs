@@ -152,6 +152,9 @@ pub fn combo(vk: u32, ctrl: bool, alt: bool, shift: bool) -> Option<String> {
         0x25 => "ArrowLeft".into(),
         0x27 => "ArrowRight".into(),
         0x74 => "F5".into(),
+        0x7A => "F11".into(),
+        0xBB => "=".into(),
+        0xBD => "-".into(),
         _ => return None,
     };
     let s = format!(
@@ -305,4 +308,21 @@ pub fn set_clipboard(text: &str) -> bool {
         let _ = CloseClipboard();
         ok
     }
+}
+
+/// Pointer position relative to the window's client area (fullscreen
+/// reveal), in physical px. None when the pointer is outside it.
+pub fn cursor_client_y(hwnd: isize) -> Option<i32> {
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetCursorPos};
+    let h = HWND(hwnd as *mut _);
+    let mut p = POINT::default();
+    let mut r = RECT::default();
+    unsafe {
+        GetCursorPos(&mut p).ok()?;
+        let _ = ScreenToClient(h, &mut p);
+        GetClientRect(h, &mut r).ok()?;
+    }
+    (p.x >= 0 && p.x < r.right && p.y >= 0 && p.y < r.bottom).then_some(p.y)
 }

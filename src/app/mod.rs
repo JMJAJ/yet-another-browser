@@ -13,10 +13,14 @@ use crate::{AppWindow, CardWindow, PaletteWindow, LayerRow, LogRow, MenuRow, Men
 use std::collections::VecDeque as Deque;
 
 mod commands;
+mod features;
 mod pages;
 mod popups;
 mod strip;
 use pages::{Palette, Visit};
+pub use features::{DlInfo, DlState, MenuCtx};
+use features::{Features, PageOp};
+use std::collections::HashMap;
 use popups::{Card, Toast, ToastAct, Tone};
 use strip::TabOp;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -56,6 +60,14 @@ pub enum Command {
     Settings,
     Ephemeral,
     CopyLink,
+    Find,
+    Downloads,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    Fullscreen,
+    DevTools,
+    PauseSite,
 }
 
 impl Command {
@@ -79,6 +91,13 @@ impl Command {
             "ctrl+h" => Command::History,
             "ctrl+," => Command::Settings,
             "ctrl+shift+n" => Command::Ephemeral,
+            "ctrl+f" => Command::Find,
+            "ctrl+j" => Command::Downloads,
+            "ctrl+=" => Command::ZoomIn,
+            "ctrl+-" => Command::ZoomOut,
+            "ctrl+0" => Command::ZoomReset,
+            "F11" => Command::Fullscreen,
+            "ctrl+shift+i" => Command::DevTools,
             _ => {
                 let d = combo.strip_prefix("ctrl+")?;
                 let n: usize = d.parse().ok().filter(|n| (1..=9).contains(n))?;
@@ -100,6 +119,12 @@ pub fn combo_from_slint(text: &str, ctrl: bool, alt: bool, shift: bool) -> Optio
         "ArrowRight".to_string()
     } else if c == char::from(Key::F5) {
         "F5".to_string()
+    } else if c == char::from(Key::F11) {
+        "F11".to_string()
+    } else if c == '=' || c == '+' {
+        "=".to_string()
+    } else if c == '-' {
+        "-".to_string()
     } else if (c as u32) < 0x20 && ctrl {
         // some platforms deliver ctrl+letter as a control character
         (((c as u8) + 0x60) as char).to_string()
@@ -173,6 +198,30 @@ pub enum Msg {
     /// real loading progress, 0..1 (engines that report it)
     #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     Progress(u64, f32),
+    FindResult(u64, i32, i32),
+    Download(DlInfo),
+    PermAsk(u64, u64, String, u32),
+    PermQuiet(u64, String),
+    PageMenu(u64, MenuCtx),
+    Status(u64, String),
+    LoadError(u64, String, i32, String),
+    CertError(u64, String, i32),
+    Fullscreen(bool),
+    FindEdited,
+    FindStep(i32),
+    FindCase,
+    FindClose,
+    DlToggle,
+    DlAct(usize, String),
+    DlClear,
+    PermAnswer(String),
+    ZoomStep(i32),
+    SiteInfo,
+    SiteSet(String, String),
+    SiteClear,
+    SiteDetails,
+    SiteClose,
+    RevealCheck,
     PaletteEdited(String),
     PaletteRun(usize),
     PaletteClose,
@@ -246,6 +295,10 @@ struct Tab {
     blocked: bool,
     /// Loading progress 0..1 when the engine reports it, else 0.
     progress: f32,
+    /// A notification request was refused quietly on this page.
+    bell: bool,
+    /// The certificate error page is showing.
+    cert_error: bool,
     /// An internal page (history, settings) shown instead of a web view.
     page: Option<Internal>,
 }
@@ -283,6 +336,8 @@ impl Tab {
             hidden_since: None,
             blocked: false,
             progress: 0.0,
+            bell: false,
+            cert_error: false,
             page: None,
         }
     }
@@ -312,6 +367,9 @@ pub struct App {
     #[cfg_attr(not(feature = "engine-cef"), allow(dead_code))]
     engine: Kind,
     trace: bool,
+    feat: Features,
+    /// (tab, bounds) last given to the page engine
+    last_layout: Option<(u64, String)>,
     /// tab ids, most recently used first (for "closing a tab focuses: last used")
     mru: Vec<u64>,
     sugg_targets: Vec<Target>,
@@ -337,11 +395,12 @@ enum Target {
     Cmd(Command),
 }
 
-/// What a main-menu row does.
-#[derive(Clone, Copy)]
+/// What a menu row does.
+#[derive(Clone)]
 enum MenuAct {
     Run(Command),
     Tab(TabOp, usize),
+    Page(PageOp),
     Nothing,
 }
 
@@ -406,6 +465,7 @@ impl App {
         menu_win.on_pick(|i| post(Msg::MenuPick(i.max(0) as usize)));
         menu_win.on_pick_theme(|i| post(Msg::MenuTheme(i.max(0) as usize)));
         menu_win.on_dismiss(|| post(Msg::MenuClose));
+        menu_win.on_zoom(|d| post(Msg::ZoomStep(d)));
         let card_win = CardWindow::new().expect("card window");
         let toast_win = ToastWindow::new().expect("toast window");
         toast_win.on_act(|| post(Msg::ToastAction));
@@ -432,6 +492,8 @@ impl App {
             narrow: false,
             engine: Kind::WebView2,
             trace: std::env::var_os("BRX_TRACE").is_some(),
+            feat: Features::new(),
+            last_layout: None,
             mru: Vec::new(),
             sugg_targets: Vec::new(),
             menu: Menu {
@@ -574,6 +636,7 @@ impl App {
     }
 
     fn show_active(&mut self) {
+        self.last_layout = None;
         let now = std::time::Instant::now();
         if let Some(t) = self.tabs.get(self.active) {
             let id = t.id;
@@ -603,10 +666,18 @@ impl App {
         }
     }
 
-    fn layout(&self) {
+    fn layout(&mut self) {
         // geometry events can arrive before the first tab exists
-        if let Some(wv) = self.tabs.get(self.active).and_then(|t| t.wv.as_ref()) {
-            wv.set_bounds(self.content_rect(), self.ui.window().scale_factor() as f64);
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let r = self.content_rect();
+        let key = (t.id, format!("{:?}", r));
+        // nothing moved: do not resize the page again
+        if self.last_layout.as_ref() == Some(&key) {
+            return;
+        }
+        if let Some(wv) = t.wv.as_ref() {
+            wv.set_bounds(r, self.ui.window().scale_factor() as f64);
+            self.last_layout = Some(key);
         }
     }
 
@@ -715,27 +786,6 @@ impl App {
         }
     }
 
-    fn blocked_page(&self, url: &str, rule: &str) -> String {
-        let p = &THEMES[self.theme];
-        let host = urlparts::split(url).map_or(url, |p| p.host);
-        format!(
-            "<!doctype html><meta charset=utf-8><title>blocked</title>\
-             <body style=\"margin:0;height:100vh;display:flex;align-items:flex-end;background:#{:06x};color:#{:06x};font:12px {},monospace\">\
-             <div style=\"width:100%;padding:16px 24px 24px;border-top:1px solid #{:06x}\">\
-             <div style=\"font-weight:700\">blocked · {}</div>\
-             <div style=\"margin-top:10px;color:#{:06x}\">navigation layer · rule {} · add <span style=\"color:#{:06x}\">@@||{}^</span> to filters.txt to allow</div>\
-             </div></body>",
-            p.bg0,
-            p.fg,
-            html_escape(&self.cfg.font),
-            p.bg3,
-            html_escape(host),
-            p.mid,
-            html_escape(rule),
-            p.acc,
-            html_escape(host)
-        )
-    }
 
     // ------------------------------------------------------------- handlers
 
@@ -777,6 +827,10 @@ impl App {
             }
             Command::Panel => {
                 self.panel = !self.panel;
+                if self.panel {
+                    self.feat.dl_open = false;
+                    self.refresh_downloads();
+                }
                 self.ui.set_panel_open(self.panel);
             }
             Command::Theme => self.set_theme((self.theme + 1) % THEMES.len()),
@@ -792,6 +846,30 @@ impl App {
             Command::History => self.open_internal(Internal::History),
             Command::Settings => self.open_internal(Internal::Settings),
             Command::Ephemeral => self.spawn_ephemeral(),
+            Command::Find => self.open_find(),
+            Command::Downloads => {
+                self.feat.dl_open = !self.feat.dl_open;
+                if self.feat.dl_open {
+                    self.panel = false;
+                }
+                self.refresh_downloads();
+            }
+            Command::ZoomIn => self.zoom_step(1),
+            Command::ZoomOut => self.zoom_step(-1),
+            Command::ZoomReset => self.zoom_step(0),
+            Command::Fullscreen => self.set_fullscreen(!self.feat.fullscreen),
+            Command::DevTools => {
+                if let Some(wv) = &self.tabs[self.active].wv {
+                    wv.devtools();
+                }
+            }
+            Command::PauseSite => {
+                let host = features::host_of(&self.tabs[self.active].url);
+                if !host.is_empty() {
+                    let paused = !self.cfg.paused.contains(&host);
+                    self.set_paused(&host, paused);
+                }
+            }
         }
     }
 
@@ -859,8 +937,10 @@ impl App {
                     }
                 }
                 ChromeEvent::Maximized(on) => {
-                    self.ui.set_zoomed(on);
-                    self.update_hitmap();
+                    if self.ui.get_zoomed() != on {
+                        self.ui.set_zoomed(on);
+                        self.update_hitmap();
+                    }
                 }
             },
             Msg::WinMinimize => self.ui.window().set_minimized(true),
@@ -890,11 +970,12 @@ impl App {
                 }
             }
             Msg::MenuPick(i) => {
-                let act = self.menu.acts.get(i).copied().unwrap_or(MenuAct::Nothing);
+                let act = self.menu.acts.get(i).cloned().unwrap_or(MenuAct::Nothing);
                 self.close_menu();
                 match act {
                     MenuAct::Run(c) => self.run(c),
                     MenuAct::Tab(op, t) => self.tab_op(op, t),
+                    MenuAct::Page(op) => self.page_op(op),
                     MenuAct::Nothing => {}
                 }
             }
@@ -915,8 +996,57 @@ impl App {
             Msg::ToastAction => self.toast_action(),
             Msg::ToastHide(seq) => self.hide_toast(Some(seq)),
             Msg::Audio(id, on) => self.on_audio(id, on),
-            Msg::Crashed(id, all) => self.on_crash(id, all),
-            Msg::Tick => self.tick(),
+            Msg::Crashed(id, all) => {
+                self.on_crash(id, all);
+                if !all {
+                    self.crash_page(id);
+                }
+            }
+            Msg::Tick => {
+                self.tick();
+                self.refresh_downloads();
+            }
+            Msg::FindResult(t, c, a) => self.on_find_result(t, c, a),
+            Msg::Download(d) => self.on_download(d),
+            Msg::PermAsk(t, id, origin, kinds) => self.on_perm_ask(t, id, origin, kinds),
+            Msg::PermQuiet(t, origin) => self.on_perm_quiet(t, origin),
+            Msg::PageMenu(t, ctx) => self.open_page_menu(t, ctx),
+            Msg::Status(t, url) => self.on_status(t, url),
+            Msg::LoadError(t, url, code, text) => self.on_load_error(t, url, code, text),
+            Msg::CertError(t, url, code) => self.on_cert_error(t, url, code),
+            Msg::Fullscreen(on) => self.set_fullscreen(on),
+            Msg::FindEdited => self.find(0),
+            Msg::FindStep(d) => self.find(d),
+            Msg::FindCase => {
+                self.feat.find_case = !self.feat.find_case;
+                self.find(0);
+            }
+            Msg::FindClose => self.close_find(),
+            Msg::DlToggle => self.run(Command::Downloads),
+            Msg::DlAct(i, a) => self.dl_act(i, &a),
+            Msg::DlClear => {
+                self.feat.downloads.retain(|d| d.state == DlState::Running);
+                self.refresh_downloads();
+            }
+            Msg::PermAnswer(a) => self.perm_answer(&a),
+            Msg::ZoomStep(d) => self.zoom_step(d),
+            Msg::SiteInfo => {
+                if self.feat.site_open {
+                    self.close_site_info();
+                } else {
+                    self.open_site_info();
+                }
+            }
+            Msg::SiteSet(k, v) => self.site_set(&k, &v),
+            Msg::SiteClear => self.site_clear(),
+            Msg::SiteDetails => {
+                self.close_site_info();
+                if !self.panel {
+                    self.run(Command::Panel);
+                }
+            }
+            Msg::SiteClose => self.close_site_info(),
+            Msg::RevealCheck => self.reveal_check(),
             Msg::PaletteEdited(q) => self.fill_palette(&q),
             Msg::PaletteRun(i) => self.palette_run(i),
             Msg::PaletteClose => {
@@ -949,6 +1079,17 @@ impl App {
                 self.set_theme(i);
                 if self.tabs[self.active].page == Some(Internal::Settings) {
                     self.fill_settings();
+                }
+            }
+            Msg::Submit(input) if input.trim_start().starts_with('!') => {
+                // "!address": go ahead once despite a certificate error
+                let rest = input.trim_start()[1..].trim().to_string();
+                self.sugg_targets.clear();
+                self.ui.set_suggestions(ModelRc::default());
+                if let Some(url) = omnibox::resolve(&rest, &self.cfg.search) {
+                    #[cfg(feature = "engine-cef")]
+                    engine::cef::allow_cert_once(&urlparts::split(&url).map_or(String::new(), |p| p.host.to_string()));
+                    self.navigate_active(url);
                 }
             }
             Msg::Submit(input) => {
@@ -1019,6 +1160,8 @@ impl App {
                     if !url.starts_with("about:") && !url.starts_with("data:") {
                         self.tabs[i].url = url;
                         self.tabs[i].blocked = false;
+                        self.tabs[i].bell = false;
+                        self.tabs[i].cert_error = false;
                     }
                     self.ledger.reset_tab(id);
                 }
@@ -1029,6 +1172,11 @@ impl App {
                     t.loading = false;
                     t.strips.set(0);
                     // a page whose renderer started under an older theme catches up
+                    if let Some(z) = self.feat.zoom.get(&features::host_of(&t.url)) {
+                        if let Some(wv) = &t.wv {
+                            wv.set_zoom(*z);
+                        }
+                    }
                     if let Some(wv) = &t.wv {
                         let json = theme::scroll_json(&self.cfg.scrollbars, &self.cfg.theme);
                         wv.run_script(&format!("window.__brxScroll && window.__brxScroll({json})"));
@@ -1056,7 +1204,15 @@ impl App {
             }
             Msg::BlockedNav(id, url, rule) => {
                 if let Some(i) = self.tab_index(id) {
-                    let html = self.blocked_page(&url, &rule);
+                    let host = features::host_of(&url);
+                    let html = self.info_page(
+                        "refused by shield",
+                        THEMES[self.theme].bad,
+                        &format!("blocked · {host}"),
+                        &format!("navigation layer · rule {rule} · a tracker host"),
+                        &format!("Allowing it adds <span style=\"color:#{:06x}\">@@||{host}^</span> to filters.txt.", THEMES[self.theme].acc),
+                        &[("go back", "back", true), ("allow this site", "allowsite", false)],
+                    );
                     let t = &mut self.tabs[i];
                     t.url = url;
                     t.loading = false;
@@ -1088,6 +1244,11 @@ impl App {
 
     fn on_ipc(&mut self, id: u64, body: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return };
+        if let Some(cmd) = v.get("cmd").and_then(|k| k.as_str()) {
+            let cmd = cmd.to_string();
+            self.page_command(id, &cmd);
+            return;
+        }
         if let Some(key) = v.get("key").and_then(|k| k.as_str()) {
             if let Some(c) = Command::parse(key) {
                 self.run(c);
@@ -1235,6 +1396,10 @@ impl App {
             .collect();
         ui.set_tabs(ModelRc::new(VecModel::from(tabs)));
 
+        let z = self.current_zoom();
+        ui.set_zoom_cell(if z == 100 { SharedString::new() } else { format!("{z}%").into() });
+        ui.set_bell(t.bell);
+        ui.set_dl_open(self.feat.dl_open);
         let blank = t.wv.is_none() && t.page.is_none();
         ui.set_blank(blank);
         ui.set_page(match t.page {
@@ -1258,6 +1423,8 @@ impl App {
         let host = parts.map_or("", |p| p.host);
         let tag = if t.page.is_some() {
             "brx"
+        } else if t.cert_error {
+            "cert"
         } else if t.blocked {
             "blocked"
         } else if t.url.starts_with("https://") {
@@ -1390,7 +1557,7 @@ mod tests {
     #[test]
     fn commands() {
         assert_eq!(Command::parse("ctrl+3"), Some(Command::Jump(2)));
-        assert_eq!(Command::parse("ctrl+0"), None);
+        assert_eq!(Command::parse("ctrl+0"), Some(Command::ZoomReset));
         assert_eq!(Command::parse("ctrl+shift+Tab"), Some(Command::PrevTab));
         assert_eq!(Command::parse("ctrl+x"), None);
         assert_eq!(group(2904), "2,904");

@@ -96,6 +96,21 @@ pub fn emit(ev: ShieldEvent) {
 
 // ------------------------------------------------------------------- shield
 
+/// Hosts the user allowed from a block page this session (also written to
+/// filters.txt as @@ rules, which apply from the next start).
+static ALLOWED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn allow_host(host: &str) {
+    if let Ok(mut a) = ALLOWED.lock() {
+        a.push(host.to_string());
+    }
+}
+
+pub fn is_allowed_host(url: &str) -> bool {
+    let Some(p) = urlparts::split(url) else { return false };
+    ALLOWED.lock().map_or(false, |a| a.iter().any(|h| urlparts::host_matches(p.host, h)))
+}
+
 pub struct Shield {
     pub rules: Rules,
     enabled: Cell<bool>,
@@ -115,7 +130,7 @@ impl Shield {
     }
 
     pub fn check(&self, url: &str) -> Verdict {
-        if !self.enabled() {
+        if !self.enabled() || is_allowed_host(url) {
             return Verdict::Allow;
         }
         self.rules.check(url)

@@ -67,6 +67,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         engine::cef::set_shield(cfg.shield);
         engine::cef::set_https(cfg.https == "upgrade");
+        engine::cef::set_paused(&cfg.paused);
     }
 
     let ui = AppWindow::new()?;
@@ -104,6 +105,16 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_set_value(|k, v| post(Msg::SetValue(k.into(), v.into())));
     ui.on_set_theme_pick(|i| post(Msg::MenuTheme(i.max(0) as usize)));
     ui.on_reopen_recent(|i| post(Msg::ReopenRecent(i.max(0) as usize)));
+    ui.on_find_edited(|_| post(Msg::FindEdited));
+    ui.on_find_step(|d| post(Msg::FindStep(d)));
+    ui.on_find_case_toggle(|| post(Msg::FindCase));
+    ui.on_find_close(|| post(Msg::FindClose));
+    ui.on_dl_toggle(|| post(Msg::DlToggle));
+    ui.on_dl_act(|i, a| post(Msg::DlAct(i.max(0) as usize, a.into())));
+    ui.on_dl_clear(|| post(Msg::DlClear));
+    ui.on_perm_answer(|a| post(Msg::PermAnswer(a.into())));
+    ui.on_zoom_reset(|| post(Msg::ZoomStep(0)));
+    ui.on_site_info(|| post(Msg::SiteInfo));
     ui.on_shortcut(|text, ctrl, alt, shift| match app::combo_from_slint(&text, ctrl, alt, shift) {
         Some(c) => {
             post(Msg::Key(c));

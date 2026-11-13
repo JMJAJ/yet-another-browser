@@ -74,8 +74,11 @@ impl App {
             item("new ephemeral window", "ctrl+shift+n", MenuAct::Run(Command::Ephemeral)),
             sep(),
             item("command palette", "ctrl+k", MenuAct::Run(Command::Palette)),
+            item("find in page", "ctrl+f", MenuAct::Run(Command::Find)),
             item("history", "ctrl+h", MenuAct::Run(Command::History)),
+            item("downloads", "ctrl+j", MenuAct::Run(Command::Downloads)),
             sep(),
+            (3, "zoom".into(), "", true, MenuAct::Nothing),
             (2, "theme".into(), "", true, MenuAct::Nothing),
             sep(),
             item("settings", "ctrl+,", MenuAct::Run(Command::Settings)),
@@ -116,11 +119,15 @@ impl App {
         self.show_menu(rows, x, 32.0, 250.0, false);
     }
 
+    pub(super) fn show_menu_rows(&mut self, rows: Vec<Row>, x: f32, y: f32, w: f32) {
+        self.show_menu(rows, x, y, w, false);
+    }
+
     fn show_menu(&mut self, rows: Vec<Row>, x: f32, y: f32, w: f32, from_menu_cell: bool) {
         self.hide_card();
-        let height: f32 = 12.0 + rows.iter().map(|r| match r.0 { 1 => 9.0, 2 => 30.0, _ => 26.0 }).sum::<f32>();
+        let height: f32 = 12.0 + rows.iter().map(|r| match r.0 { 1 => 9.0, 2 | 3 => 30.0, _ => 26.0 }).sum::<f32>();
         let nav: Vec<i32> = rows.iter().enumerate().filter(|(_, r)| r.0 == 0 && r.3).map(|(i, _)| i as i32).collect();
-        self.menu.acts = rows.iter().map(|r| r.4).collect();
+        self.menu.acts = rows.iter().map(|r| r.4.clone()).collect();
         let model: Vec<MenuRow> = rows
             .iter()
             .map(|r| MenuRow { kind: r.0 as i32, label: r.1.as_str().into(), key: r.2.into(), enabled: r.3 })
@@ -136,6 +143,7 @@ impl App {
         m.set_swatches(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.acc)).collect::<Vec<_>>())));
         m.set_swatch_bgs(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.bg0)).collect::<Vec<_>>())));
         m.set_theme_index(self.theme as i32);
+        m.set_zoom_pct(self.current_zoom() as i32);
         m.set_hl(-1);
         m.set_pos(-1);
         paint(&m.global::<Theme>(), &THEMES[self.theme], &self.cfg.font);

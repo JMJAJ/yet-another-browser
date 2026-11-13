@@ -13,7 +13,7 @@
 //! - runtime: the renderer runs `runtime.js` the moment each JS context is
 //!   created, and bridges `window.ipc.postMessage` back to the app.
 
-use crate::app::{post, Msg};
+use crate::app::{post, DlInfo, DlState, MenuCtx, Msg};
 use crate::shield::{self, params, urlparts, Layer, Rules, ShieldEvent, Verdict};
 use ::cef::*;
 use std::collections::HashMap;
@@ -27,6 +27,83 @@ static SHIELD_ON: AtomicBool = AtomicBool::new(true);
 static HTTPS: AtomicBool = AtomicBool::new(false);
 /// param-strip redirects per tab since the last finished load (loop guard)
 static STRIPS: Mutex<Option<HashMap<u64, u8>>> = Mutex::new(None);
+
+/// Sites where the user paused the shield: requests are counted, not blocked.
+static PAUSED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Hosts whose certificate error the user chose to override once (`!url`).
+static CERT_ONCE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Top-level site per tab, for per-site pause on subresource requests.
+static TAB_SITE: Mutex<Option<HashMap<u64, String>>> = Mutex::new(None);
+/// Pending permission prompts and live downloads, answered from the app.
+static PROMPTS: Mutex<Option<HashMap<u64, Prompt>>> = Mutex::new(None);
+static DOWNLOADS: Mutex<Option<HashMap<u32, DlCallback>>> = Mutex::new(None);
+static NEXT_PROMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+enum Prompt {
+    Media(MediaAccessCallback, u32),
+    Generic(PermissionPromptCallback),
+}
+unsafe impl Send for Prompt {}
+struct DlCallback(DownloadItemCallback);
+unsafe impl Send for DlCallback {}
+
+pub fn set_paused(sites: &[String]) {
+    if let Ok(mut p) = PAUSED.lock() {
+        *p = sites.to_vec();
+    }
+}
+
+fn paused_for(tab: u64) -> bool {
+    let site = TAB_SITE.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&tab).cloned()));
+    match site {
+        Some(s) => PAUSED.lock().map_or(false, |p| p.iter().any(|x| urlparts::host_matches(&s, x))),
+        None => false,
+    }
+}
+
+pub fn allow_cert_once(host: &str) {
+    if let Ok(mut c) = CERT_ONCE.lock() {
+        c.push(host.to_string());
+    }
+}
+
+/// Answer a permission prompt: allow = grant, once = do not remember (the
+/// app remembers; the engine is told the same either way).
+pub fn answer_prompt(id: u64, allow: bool) {
+    let p = PROMPTS.lock().ok().and_then(|mut m| m.get_or_insert_with(HashMap::new).remove(&id));
+    on_ui(move || match p {
+        Some(Prompt::Media(cb, wanted)) => {
+            if allow {
+                cb.cont(wanted)
+            } else {
+                cb.cancel()
+            }
+        }
+        Some(Prompt::Generic(cb)) => cb.cont(if allow { PermissionRequestResult::ACCEPT } else { PermissionRequestResult::DENY }),
+        None => {}
+    });
+}
+
+pub fn download_action(id: u32, action: &'static str) {
+    let cb = DOWNLOADS.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(&id).map(|c| DlCallback(c.0.clone()))));
+    if let Some(cb) = cb {
+        on_ui(move || match action {
+            "pause" => cb.0.pause(),
+            "resume" => cb.0.resume(),
+            _ => cb.0.cancel(),
+        });
+    }
+}
+
+/// Erase cookies for one site (site info › clear site data).
+pub fn clear_site(url: &str) {
+    let url = url.to_string();
+    on_ui(move || {
+        if let Some(cm) = cookie_manager_get_global_manager(None) {
+            cm.delete_cookies(Some(&s(&url)), None, None);
+        }
+    });
+}
 
 pub fn set_shield(on: bool) {
     SHIELD_ON.store(on, Ordering::Relaxed);
@@ -46,6 +123,9 @@ fn rules() -> &'static Rules {
 
 fn check(url: &str) -> Verdict {
     if SHIELD_ON.load(Ordering::Relaxed) {
+        if crate::shield::is_allowed_host(url) {
+            return Verdict::Allow;
+        }
         rules().check(url)
     } else {
         Verdict::Allow
@@ -112,6 +192,36 @@ pub fn run_subprocess() -> Option<i32> {
 /// Start the engine in the browser process. `cache` = profile folder;
 /// `None` keeps everything in memory (ephemeral windows).
 static STARTED: AtomicBool = AtomicBool::new(false);
+/// CEF drops browsers created before its context is up; queue them.
+static CONTEXT_READY: AtomicBool = AtomicBool::new(false);
+static PENDING: Mutex<Vec<Job>> = Mutex::new(Vec::new());
+
+fn when_ready(job: Job) {
+    let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if CONTEXT_READY.load(Ordering::Acquire) {
+        drop(q);
+        job();
+    } else {
+        q.push(job);
+    }
+}
+
+wrap_browser_process_handler! {
+    struct BrxBrowserProcess;
+
+    impl BrowserProcessHandler {
+        fn on_context_initialized(&self) {
+            let jobs = {
+                let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+                CONTEXT_READY.store(true, Ordering::Release);
+                std::mem::take(&mut *q)
+            };
+            for job in jobs {
+                job();
+            }
+        }
+    }
+}
 
 pub fn started() -> bool {
     STARTED.load(Ordering::Relaxed)
@@ -137,6 +247,8 @@ pub fn ensure_started(ephemeral: bool) -> bool {
 }
 
 fn start(root: &std::path::Path, cache: Option<&std::path::Path>) -> bool {
+    // the version handshake must precede any other CEF call in this process
+    let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = args::Args::new();
     let mut app = BrxApp::new();
     let settings = Settings {
@@ -192,6 +304,10 @@ wrap_app! {
         fn render_process_handler(&self) -> Option<RenderProcessHandler> {
             Some(BrxRender::new())
         }
+
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(BrxBrowserProcess::new())
+        }
     }
 }
 
@@ -222,10 +338,13 @@ wrap_render_process_handler! {
                     global.set_value_bykey(Some(&s("ipc")), Some(&mut obj), Default::default());
                 }
             }
-            // the runtime shield layer, before any page script runs
+            // the runtime shield layer, before any page script runs; sites
+            // the user paused get only the scrollbar part
+            let paused = crate::config::Config::load().paused;
+            let pre = format!("window.__brxPaused = {};", serde_json::to_string(&paused).unwrap_or_else(|_| "[]".into()));
             let mut retval = None;
             let mut exception = None;
-            context.eval(Some(&s(runtime_script())), Some(&s("brx://shield/runtime.js")), 0, Some(&mut retval), Some(&mut exception));
+            context.eval(Some(&s(&format!("{pre}\n{}", runtime_script()))), Some(&s("brx://shield/runtime.js")), 0, Some(&mut retval), Some(&mut exception));
         }
     }
 }
@@ -304,17 +423,23 @@ fn place(b: &Browser, rect: (i32, i32, i32, i32), visible: bool) {
 impl Handle {
     pub fn create(tab: u64, parent: isize, rect: (i32, i32, i32, i32), url: &str, ephemeral: bool) -> Handle {
         let shared: SharedRef = Arc::new(Mutex::new(Cell(Shared { rect, visible: true, ..Default::default() })));
-        // Alloy: a bare page for embedding (the Chrome style expects to own
-        // a Chrome window with its own toolbar)
-        let window_info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..Default::default() }.set_as_child(
-            sys::HWND(parent as *mut sys::HWND__),
-            &::cef::Rect { x: rect.0, y: rect.1, width: rect.2, height: rect.3 },
-        );
-        let mut client = BrxClient::new(tab, shared.clone());
-        let settings = BrowserSettings::default();
-        // ephemeral: a context with no cache path lives only in memory
-        let mut ctx = if ephemeral { request_context_create_context(Some(&RequestContextSettings::default()), None) } else { None };
-        browser_host_create_browser(Some(&window_info), Some(&mut client), Some(&s(url)), Some(&settings), None, ctx.as_mut());
+        let job_shared = shared.clone();
+        let url = url.to_string();
+        when_ready(Box::new(move || {
+            // geometry may have changed while the engine was starting
+            let rect = job_shared.lock().map_or(rect, |g| g.0.rect);
+            // Alloy: a bare page for embedding (the Chrome style expects to
+            // own a Chrome window with its own toolbar)
+            let window_info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..Default::default() }.set_as_child(
+                sys::HWND(parent as *mut sys::HWND__),
+                &::cef::Rect { x: rect.0, y: rect.1, width: rect.2, height: rect.3 },
+            );
+            let mut client = BrxClient::new(tab, job_shared);
+            let settings = BrowserSettings::default();
+            // ephemeral: a context with no cache path lives only in memory
+            let mut ctx = if ephemeral { request_context_create_context(Some(&RequestContextSettings::default()), None) } else { None };
+            browser_host_create_browser(Some(&window_info), Some(&mut client), Some(&s(&url)), Some(&settings), None, ctx.as_mut());
+        }));
         Handle { parent, shared }
     }
 
@@ -323,10 +448,11 @@ impl Handle {
     fn with(&self, f: impl FnOnce(&Browser) + Send + 'static) {
         let shared = self.shared.clone();
         on_ui(move || {
-            if let Ok(g) = shared.lock() {
-                if let Some(b) = g.0.browser.as_ref() {
-                    f(b);
-                }
+            // Never call into CEF while holding the lock: CEF may call our
+            // handlers back synchronously, and they take the same lock.
+            let b = shared.lock().ok().and_then(|g| g.0.browser.clone());
+            if let Some(b) = b {
+                f(&b);
             }
         });
     }
@@ -350,6 +476,63 @@ impl Handle {
 
     pub fn reload(&self) {
         self.with(|b| b.reload());
+    }
+
+    pub fn find(&self, text: &str, forward: bool, case: bool, next: bool) {
+        let text = text.to_string();
+        self.with(move |b| {
+            if let Some(h) = b.host() {
+                if text.is_empty() {
+                    h.stop_finding(1);
+                } else {
+                    h.find(Some(&s(&text)), forward as i32, case as i32, next as i32);
+                }
+            }
+        });
+    }
+
+    pub fn stop_find(&self, keep_selection: bool) {
+        self.with(move |b| {
+            if let Some(h) = b.host() {
+                h.stop_finding(!keep_selection as i32);
+            }
+        });
+    }
+
+    /// `percent` 100 = normal. Chromium zoom levels are log base 1.2.
+    pub fn set_zoom(&self, percent: u32) {
+        let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
+        self.with(move |b| {
+            if let Some(h) = b.host() {
+                h.set_zoom_level(level);
+            }
+        });
+    }
+
+    pub fn devtools(&self) {
+        self.with(|b| {
+            if let Some(h) = b.host() {
+                let info = WindowInfo::default();
+                #[cfg(windows)]
+                let info = info.set_as_popup(sys::HWND::default(), "brxswer devtools");
+                h.show_dev_tools(Some(&info), None, Some(&BrowserSettings::default()), None);
+            }
+        });
+    }
+
+    pub fn edit(&self, what: &'static str) {
+        self.with(move |b| {
+            if let Some(f) = b.main_frame() {
+                match what {
+                    "cut" => f.cut(),
+                    "copy" => f.copy(),
+                    "paste" => f.paste(),
+                    "selectall" => f.select_all(),
+                    "source" => f.view_source(),
+                    _ => {}
+                }
+            }
+        });
     }
 
     pub fn run_script(&self, js: &str) {
@@ -376,11 +559,12 @@ impl Handle {
     pub fn set_visible(&self, on: bool) {
         let shared = self.shared.clone();
         on_ui(move || {
-            if let Ok(mut g) = shared.lock() {
+            let todo = shared.lock().ok().and_then(|mut g| {
                 g.0.visible = on;
-                if let Some(b) = &g.0.browser {
-                    place(b, g.0.rect, on);
-                }
+                g.0.browser.clone().map(|b| (b, g.0.rect))
+            });
+            if let Some((b, rect)) = todo {
+                place(&b, rect, on);
             }
         });
     }
@@ -390,11 +574,12 @@ impl Handle {
         let z = rect.size.to_physical::<i32>(scale);
         let shared = self.shared.clone();
         on_ui(move || {
-            if let Ok(mut g) = shared.lock() {
+            let todo = shared.lock().ok().and_then(|mut g| {
                 g.0.rect = (p.x, p.y, z.width, z.height);
-                if let Some(b) = &g.0.browser {
-                    place(b, g.0.rect, g.0.visible);
-                }
+                g.0.browser.clone().map(|b| (b, g.0.rect, g.0.visible))
+            });
+            if let Some((b, rect, visible)) = todo {
+                place(&b, rect, visible);
             }
         });
     }
@@ -431,11 +616,12 @@ impl Handle {
     pub fn set_muted(&self, muted: bool) {
         let shared = self.shared.clone();
         on_ui(move || {
-            if let Ok(mut g) = shared.lock() {
+            let b = shared.lock().ok().and_then(|mut g| {
                 g.0.muted = muted;
-                if let Some(h) = g.0.browser.as_ref().and_then(|b| b.host()) {
-                    h.set_audio_muted(muted as i32);
-                }
+                g.0.browser.clone()
+            });
+            if let Some(h) = b.and_then(|b| b.host()) {
+                h.set_audio_muted(muted as i32);
             }
         });
     }
@@ -494,6 +680,18 @@ wrap_client! {
         fn focus_handler(&self) -> Option<FocusHandler> {
             Some(BrxFocus::new(self.tab))
         }
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(BrxFind::new(self.tab))
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(BrxDownloads::new(self.tab))
+        }
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(BrxPermissions::new(self.tab))
+        }
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(BrxMenu::new(self.tab))
+        }
         fn on_process_message_received(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _source: ProcessId, message: Option<&mut ProcessMessage>) -> i32 {
             let Some(m) = message else { return 0 };
             if CefString::from(&m.name()).to_string() != "brx-ipc" {
@@ -519,6 +717,13 @@ wrap_display_handler! {
         fn on_loading_progress_change(&self, _browser: Option<&mut Browser>, progress: f64) {
             send(Msg::Progress(self.tab, progress as f32));
         }
+        // the hovered link's destination
+        fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {
+            send(Msg::Status(self.tab, value.map(|v| v.to_string()).unwrap_or_default()));
+        }
+        fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
+            send(Msg::Fullscreen(fullscreen != 0));
+        }
     }
 }
 
@@ -531,14 +736,17 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(b) = browser else { return };
-            if let Ok(mut g) = self.shared.lock() {
-                place(b, g.0.rect, g.0.visible);
-                if g.0.muted {
+            let state = self.shared.lock().ok().map(|mut g| {
+                g.0.browser = Some(b.clone());
+                (g.0.rect, g.0.visible, g.0.muted)
+            });
+            if let Some((rect, visible, muted)) = state {
+                place(b, rect, visible);
+                if muted {
                     if let Some(h) = b.host() {
                         h.set_audio_muted(1);
                     }
                 }
-                g.0.browser = Some(b.clone());
             }
             send(Msg::Geometry);
         }
@@ -593,6 +801,20 @@ wrap_load_handler! {
                 }
                 send(Msg::LoadFinished(self.tab, url));
             }
+        }
+        fn on_load_error(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
+            let Some(f) = frame else { return };
+            // ERR_ABORTED: we (or the user) cancelled it; not an error to show
+            if f.is_main() == 0 || error_code == Errorcode::ABORTED {
+                return;
+            }
+            let code: sys::cef_errorcode_t = error_code.into();
+            send(Msg::LoadError(
+                self.tab,
+                failed_url.map(|u| u.to_string()).unwrap_or_default(),
+                code as i32,
+                error_text.map(|t| t.to_string()).unwrap_or_default(),
+            ));
         }
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if let Some(f) = frame {
@@ -652,6 +874,9 @@ wrap_request_handler! {
                 return 0;
             }
             let url = CefString::from(&req.url()).to_string();
+            if let (Some(p), Ok(mut m)) = (urlparts::split(&url), TAB_SITE.lock()) {
+                m.get_or_insert_with(HashMap::new).insert(self.tab, p.host.to_string());
+            }
             navigation(self.tab, &url) as i32
         }
 
@@ -666,6 +891,21 @@ wrap_request_handler! {
             _disable_default_handling: Option<&mut i32>,
         ) -> Option<ResourceRequestHandler> {
             Some(BrxTransport::new(self.tab))
+        }
+
+        fn on_certificate_error(&self, _browser: Option<&mut Browser>, cert_error: Errorcode, request_url: Option<&CefString>, _ssl_info: Option<&mut Sslinfo>, callback: Option<&mut Callback>) -> i32 {
+            let url = request_url.map(|u| u.to_string()).unwrap_or_default();
+            let host = urlparts::split(&url).map_or(String::new(), |p| p.host.to_string());
+            let once = CERT_ONCE.lock().ok().and_then(|mut c| c.iter().position(|h| *h == host).map(|i| c.remove(i))).is_some();
+            if once {
+                if let Some(cb) = callback {
+                    cb.cont();
+                }
+                return 1;
+            }
+            let code: sys::cef_errorcode_t = cert_error.into();
+            send(Msg::CertError(self.tab, url, code as i32));
+            0
         }
 
         fn on_render_process_terminated(&self, _browser: Option<&mut Browser>, _status: TerminationStatus, _error_code: i32, _error_string: Option<&CefString>) {
@@ -689,7 +929,10 @@ fn navigation(tab: u64, url: &str) -> bool {
     if !SHIELD_ON.load(Ordering::Relaxed) || !(url.starts_with("http://") || url.starts_with("https://")) {
         return false;
     }
-    if let Verdict::Block(rule) = rules().check(url) {
+    if paused_for(tab) {
+        return false;
+    }
+    if let Verdict::Block(rule) = check(url) {
         let host = urlparts::split(url).map_or(String::new(), |p| p.host.to_string());
         emit(tab, Layer::Navigation, host, " page refused".into(), 1, true);
         send(Msg::BlockedNav(tab, url.to_string(), rule));
@@ -735,7 +978,7 @@ wrap_resource_request_handler! {
                 // answered by resource_handler with a fake reply
                 return ReturnValue::CONTINUE;
             }
-            if SHIELD_ON.load(Ordering::Relaxed) {
+            if SHIELD_ON.load(Ordering::Relaxed) && !paused_for(self.tab) {
                 req.set_header_by_name(Some(&s("Sec-GPC")), Some(&s("1")), 1);
                 if req.resource_type() != ResourceType::MAIN_FRAME {
                     if let Some(c) = params::strip_generic(&url) {
@@ -758,18 +1001,190 @@ wrap_resource_request_handler! {
                 Verdict::Block(_) => {
                     let t = req.resource_type();
                     let p = urlparts::split(&url);
+                    let paused = paused_for(self.tab);
                     emit(
                         self.tab,
                         Layer::Transport,
                         p.map_or_else(String::new, |p| p.host.to_string()),
-                        format!("{} · {}", p.map_or("", |p| p.path), kind_name(t)),
+                        format!("{} · {}{}", p.map_or("", |p| p.path), kind_name(t), if paused { " (seen)" } else { "" }),
                         1,
                         false,
                     );
+                    if paused {
+                        return None;
+                    }
                     let origin = CefString::from(&req.header_by_name(Some(&s("Origin")))).to_string();
                     Some(FakeReply::new(Arc::new(Mutex::new(Fake::for_kind(t, origin)))))
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------- M3 handlers
+
+wrap_find_handler! {
+    struct BrxFind {
+        tab: u64,
+    }
+
+    impl FindHandler {
+        fn on_find_result(&self, _browser: Option<&mut Browser>, _identifier: i32, count: i32, _selection_rect: Option<&::cef::Rect>, active_match_ordinal: i32, _final_update: i32) {
+            send(Msg::FindResult(self.tab, count, active_match_ordinal));
+        }
+    }
+}
+
+fn downloads_dir() -> std::path::PathBuf {
+    dirs::download_dir().unwrap_or_else(|| crate::config::dir().join("downloads"))
+}
+
+/// A free file name in the downloads folder ("name (2).ext" if taken).
+fn free_name(name: &str) -> std::path::PathBuf {
+    let dir = downloads_dir();
+    let name = if name.trim().is_empty() { "download" } else { name };
+    let p = dir.join(name);
+    if !p.exists() {
+        return p;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((a, b)) => (a.to_string(), format!(".{b}")),
+        None => (name.to_string(), String::new()),
+    };
+    (2..1000).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|p| !p.exists()).unwrap_or(p)
+}
+
+wrap_download_handler! {
+    struct BrxDownloads {
+        tab: u64,
+    }
+
+    impl DownloadHandler {
+        fn can_download(&self, _browser: Option<&mut Browser>, _url: Option<&CefString>, _request_method: Option<&CefString>) -> i32 {
+            1
+        }
+
+        fn on_before_download(&self, _browser: Option<&mut Browser>, _download_item: Option<&mut DownloadItem>, suggested_name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
+            let path = free_name(&suggested_name.map(|n| n.to_string()).unwrap_or_default());
+            if let Some(cb) = callback {
+                cb.cont(Some(&s(&path.to_string_lossy())), 0);
+            }
+            1
+        }
+
+        fn on_download_updated(&self, _browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, callback: Option<&mut DownloadItemCallback>) {
+            let Some(d) = download_item else { return };
+            if d.is_valid() == 0 {
+                return;
+            }
+            let id = d.id();
+            if let (Some(cb), Ok(mut m)) = (callback, DOWNLOADS.lock()) {
+                m.get_or_insert_with(HashMap::new).insert(id, DlCallback(cb.clone()));
+            }
+            let path = CefString::from(&d.full_path()).to_string();
+            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| CefString::from(&d.suggested_file_name()).to_string());
+            let state = if d.is_complete() != 0 {
+                DlState::Done
+            } else if d.is_canceled() != 0 {
+                DlState::Canceled
+            } else if d.is_interrupted() != 0 {
+                DlState::Failed
+            } else {
+                DlState::Running
+            };
+            if state != DlState::Running {
+                if let Ok(mut m) = DOWNLOADS.lock() {
+                    m.get_or_insert_with(HashMap::new).remove(&id);
+                }
+            }
+            send(Msg::Download(DlInfo {
+                id,
+                name,
+                path,
+                received: d.received_bytes(),
+                total: d.total_bytes(),
+                speed: d.current_speed(),
+                state,
+            }));
+        }
+    }
+}
+
+const PERM_CAMERA: u32 = 4;
+const PERM_GEO: u32 = 256;
+const PERM_MIC: u32 = 4096;
+const PERM_NOTIFY: u32 = 32768;
+const MEDIA_AUDIO: u32 = 1;
+const MEDIA_VIDEO: u32 = 2;
+
+wrap_permission_handler! {
+    struct BrxPermissions {
+        tab: u64,
+    }
+
+    impl PermissionHandler {
+        // getUserMedia: camera / microphone
+        fn on_request_media_access_permission(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, requesting_origin: Option<&CefString>, requested_permissions: u32, callback: Option<&mut MediaAccessCallback>) -> i32 {
+            let Some(cb) = callback else { return 0 };
+            let wanted = requested_permissions & (MEDIA_AUDIO | MEDIA_VIDEO);
+            if wanted == 0 {
+                cb.cancel();
+                return 1;
+            }
+            let kinds = (if wanted & MEDIA_VIDEO != 0 { PERM_CAMERA } else { 0 }) | (if wanted & MEDIA_AUDIO != 0 { PERM_MIC } else { 0 });
+            let id = NEXT_PROMPT.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut m) = PROMPTS.lock() {
+                m.get_or_insert_with(HashMap::new).insert(id, Prompt::Media(cb.clone(), wanted));
+            }
+            send(Msg::PermAsk(self.tab, id, requesting_origin.map(|o| o.to_string()).unwrap_or_default(), kinds));
+            1
+        }
+
+        fn on_show_permission_prompt(&self, _browser: Option<&mut Browser>, _prompt_id: u64, requesting_origin: Option<&CefString>, requested_permissions: u32, callback: Option<&mut PermissionPromptCallback>) -> i32 {
+            let Some(cb) = callback else { return 0 };
+            let origin = requesting_origin.map(|o| o.to_string()).unwrap_or_default();
+            // notifications are refused quietly; the address bar shows it
+            if requested_permissions & PERM_NOTIFY != 0 && requested_permissions & !PERM_NOTIFY == 0 {
+                cb.cont(PermissionRequestResult::DENY);
+                send(Msg::PermQuiet(self.tab, origin));
+                return 1;
+            }
+            let kinds = requested_permissions & (PERM_CAMERA | PERM_MIC | PERM_GEO);
+            if kinds == 0 {
+                cb.cont(PermissionRequestResult::DENY);
+                return 1;
+            }
+            let id = NEXT_PROMPT.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut m) = PROMPTS.lock() {
+                m.get_or_insert_with(HashMap::new).insert(id, Prompt::Generic(cb.clone()));
+            }
+            send(Msg::PermAsk(self.tab, id, origin, kinds));
+            1
+        }
+    }
+}
+
+wrap_context_menu_handler! {
+    struct BrxMenu {
+        tab: u64,
+    }
+
+    impl ContextMenuHandler {
+        // draw our own menu instead of Chromium's
+        fn on_before_context_menu(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, params: Option<&mut ContextMenuParams>, model: Option<&mut MenuModel>) {
+            if let Some(m) = model {
+                m.clear();
+            }
+            let Some(p) = params else { return };
+            send(Msg::PageMenu(self.tab, MenuCtx {
+                x: p.xcoord(),
+                y: p.ycoord(),
+                link: CefString::from(&p.unfiltered_link_url()).to_string(),
+                selection: CefString::from(&p.selection_text()).to_string(),
+                editable: p.is_editable() != 0,
+                page: CefString::from(&p.page_url()).to_string(),
+            }));
         }
     }
 }

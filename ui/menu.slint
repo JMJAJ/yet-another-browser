@@ -18,6 +18,8 @@ export component MenuWindow inherits Window {
     in-out property <int> hl: -1;
     callback pick(int);
     callback pick-theme(int);
+    callback zoom(int);
+    in property <int> zoom-pct: 100;
     callback dismiss();
     width: root.menu-w;
     height: root.menu-h;
@@ -71,7 +73,7 @@ export component MenuWindow inherits Window {
                 padding-left: 1px;
                 padding-right: 1px;
                 for r[i] in root.rows: Rectangle {
-                    height: r.kind == 1 ? 9px : (r.kind == 2 ? 30px : 26px);
+                    height: r.kind == 1 ? 9px : (r.kind >= 2 ? 30px : 26px);
                     background: r.kind == 0 && r.enabled && (ta.has-hover || i == root.hl) ? Theme.bg2 : transparent;
                     animate background { duration: 80ms; }
                     if r.kind == 1: Rectangle {
@@ -93,6 +95,21 @@ export component MenuWindow inherits Window {
                             text: r.key;
                             color: Theme.mid;
                             vertical-alignment: center;
+                        }
+                        if r.kind == 3: Rectangle {
+                            width: zr.preferred-width + 2px;
+                            border-width: 1px;
+                            border-color: Theme.bg3;
+                            height: 22px;
+                            zr := HorizontalLayout {
+                                x: 1px; y: 1px; height: 20px;
+                                for z[k] in ["-", root.zoom-pct + "%", "+"]: Rectangle {
+                                    width: max(26px, zt.preferred-width + 14px);
+                                    background: zta.has-hover ? Theme.bg2 : transparent;
+                                    zt := Text { text: z; color: Theme.fg; vertical-alignment: center; horizontal-alignment: center; }
+                                    zta := TouchArea { clicked => { root.zoom(k - 1); } }
+                                }
+                            }
                         }
                         if r.kind == 2: Rectangle {
                             width: 4 * 26px + 2px;
