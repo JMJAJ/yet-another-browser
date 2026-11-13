@@ -1,0 +1,84 @@
+// Transient windows that sit over the page: the tab hover card and toasts.
+// Both are owned, non-activating windows (they never take the keyboard).
+
+import { Theme } from "theme.slint";
+
+export component CardWindow inherits Window {
+    no-frame: true;
+    in property <string> heading;
+    in property <string> url;
+    in property <string> state;
+    out property <length> want-w: min(360px, body.preferred-width + 2px);
+    out property <length> want-h: body.preferred-height + 2px;
+    width: root.want-w;
+    height: root.want-h;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.bg3;
+    }
+    body := VerticalLayout {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        padding: 9px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 3px;
+        Text { text: root.heading; color: Theme.fg; font-weight: 700; overflow: elide; }
+        Text { text: root.url; color: Theme.mid; overflow: elide; }
+        Text { text: root.state; color: Theme.mid; overflow: elide; }
+    }
+}
+
+export component ToastWindow inherits Window {
+    no-frame: true;
+    in property <string> message;
+    in property <string> action;
+    // 0 neutral, 1 ok, 2 warn, 3 bad
+    in property <int> tone;
+    callback act();
+    property <color> tone-c: root.tone == 1 ? Theme.ok : (root.tone == 2 ? Theme.warn : (root.tone == 3 ? Theme.bad : Theme.acc));
+    out property <length> want-w: row.preferred-width + 2px;
+    out property <length> want-h: 30px;
+    width: root.want-w;
+    height: root.want-h;
+    background: Theme.bg0;
+    default-font-family: Theme.font;
+    default-font-size: 12px;
+    Rectangle {
+        border-width: 1px;
+        border-color: root.tone-c;
+    }
+    row := HorizontalLayout {
+        x: 1px;
+        y: 1px;
+        height: parent.height - 2px;
+        Text {
+            text: root.message;
+            color: root.tone == 0 ? Theme.fg : root.tone-c;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            min-width: self.preferred-width + 24px;
+        }
+        if root.action != "": Rectangle {
+            width: 1px;
+            background: Theme.bg3;
+        }
+        if root.action != "": Rectangle {
+            width: act-label.preferred-width + 24px;
+            background: act-ta.has-hover ? Theme.bg2 : transparent;
+            act-label := Text {
+                text: root.action;
+                color: Theme.acc;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            act-ta := TouchArea {
+                clicked => { root.act(); }
+            }
+        }
+    }
+}

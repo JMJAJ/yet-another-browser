@@ -49,6 +49,15 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_win_maximize(|| post(Msg::WinMaximize));
     ui.on_win_close(|| post(Msg::WinClose));
     ui.on_menu_toggle(|| post(Msg::MenuToggle));
+    ui.on_tab_close(|i| post(Msg::TabClose(i.max(0) as usize)));
+    ui.on_tab_mute(|i| post(Msg::TabMute(i.max(0) as usize)));
+    ui.on_tab_menu(|i| post(Msg::TabMenu(i.max(0) as usize)));
+    ui.on_tab_hover(|i, on| post(Msg::TabHover(i.max(0) as usize, on)));
+    ui.on_tab_drag(|i, x| post(Msg::TabDrag(i.max(0) as usize, x)));
+    ui.on_tab_drop(|i, x| post(Msg::TabDrop(i.max(0) as usize, x)));
+    ui.on_tab_geom(|i, x, w| post(Msg::TabGeom(i.max(0) as usize, x, w)));
+    ui.on_strip_step(|d| post(Msg::StripStep(d)));
+    ui.on_strip_wheel(|d| post(Msg::StripWheel(d)));
     ui.on_shortcut(|text, ctrl, alt, shift| match app::combo_from_slint(&text, ctrl, alt, shift) {
         Some(c) => {
             post(Msg::Key(c));

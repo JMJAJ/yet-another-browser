@@ -3,9 +3,10 @@
 
 import { Theme } from "theme.slint";
 import { MenuWindow, MenuRow } from "menu.slint";
-export { Theme, MenuWindow, MenuRow }
+import { CardWindow, ToastWindow } from "popups.slint";
+export { Theme, MenuWindow, MenuRow, CardWindow, ToastWindow }
 
-export struct TabItem { label: string, active: bool, loading: bool }
+export struct TabItem { label: string, active: bool, loading: bool, pinned: bool, audio: bool, muted: bool, trimmed: bool, crashed: bool }
 export struct LayerRow { letter: string, label: string, count: string }
 export struct LogRow { letter: string, subject: string, detail: string }
 export struct Suggestion { tag: string, text: string, note: string }
@@ -97,30 +98,157 @@ component WinButton inherits Rectangle {
     }
 }
 
+// A tab is a numbered cell, like a Hyprland workspace: the number is its
+// shortcut, and only the active tab spends width on a title.
 component TabCell inherits Rectangle {
     in property <TabItem> item;
     in property <bool> window-active: true;
+    in property <bool> drop-before;
+    in property <bool> lifted;
     callback clicked;
-    width: label.preferred-width + 22px;
+    callback close();
+    callback mute();
+    callback menu();
+    callback hover(bool);
+    callback drag-move(length);
+    callback drag-end(length);
+    callback geom(length, length);
+    property <bool> hot: ta.has-hover;
+    property <bool> hover-x: root.hot && !root.item.active && !root.item.pinned;
+    property <bool> armed;
+    property <bool> dragging;
+    property <bool> was-drag;
+    property <length> press-x;
+    property <color> ink: root.item.crashed ? Theme.bad
+        : root.item.active ? (root.window-active ? Theme.bg0 : Theme.fg)
+        : root.item.pinned ? Theme.fg
+        : root.item.trimmed ? Theme.dim : Theme.mid;
+    width: row.preferred-width;
+    changed x => { root.geom(self.x, self.width); }
+    changed width => { root.geom(self.x, self.width); }
+    changed hot => { root.hover(self.hot); }
     // the accent marks only the window that has the keyboard
-    background: root.item.active ? (root.window-active ? Theme.acc : Theme.bg3) : (ta.has-hover ? Theme.bg1 : transparent);
+    background: root.lifted ? transparent
+        : root.item.active ? (root.window-active ? Theme.acc : Theme.bg3)
+        : root.item.pinned ? Theme.bg2
+        : root.hot ? Theme.bg1 : transparent;
     animate background { duration: 80ms; }
-    label := Text {
-        text: root.item.label;
-        color: root.item.active ? (root.window-active ? Theme.bg0 : Theme.fg) : Theme.mid;
-        font-weight: root.item.active ? 700 : 400;
-        vertical-alignment: center;
-        horizontal-alignment: center;
-    }
-    // loading marker: 1px line along the cell's bottom edge
-    if root.item.loading && !root.item.active: Rectangle {
-        y: parent.height - 2px;
-        height: 2px;
-        background: Theme.mid;
-    }
     ta := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                root.armed = true;
+                root.dragging = false;
+                root.was-drag = false;
+                root.press-x = self.mouse-x;
+            }
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                if (root.dragging) {
+                    root.drag-end(self.mouse-x);
+                }
+                root.armed = false;
+                root.dragging = false;
+            }
+            if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.up) {
+                root.close();
+            }
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                root.menu();
+            }
+        }
+        moved => {
+            if (root.armed && !root.dragging && (self.mouse-x - root.press-x > 6px || root.press-x - self.mouse-x > 6px)) {
+                root.dragging = true;
+                root.was-drag = true;
+            }
+            if (root.dragging) {
+                root.drag-move(self.mouse-x);
+            }
+        }
+        clicked => {
+            if (!root.was-drag) {
+                root.clicked();
+            }
+        }
+    }
+    row := HorizontalLayout {
+        padding-left: 11px;
+        padding-right: root.item.active && !root.item.pinned ? 6px : 11px;
+        spacing: 6px;
+        Rectangle {
+            width: lbl.preferred-width;
+            lbl := Text {
+                text: root.item.label;
+                color: root.ink;
+                font-weight: root.item.active ? 700 : 400;
+                vertical-alignment: center;
+                opacity: root.hover-x ? 0 : 1;
+            }
+            // crashed: the number is struck through
+            if root.item.crashed: Rectangle {
+                y: parent.height / 2;
+                height: 1px;
+                background: Theme.bad;
+            }
+            // inactive tabs show a close glyph in place of the number on hover
+            if root.hover-x: Rectangle {
+                x: (parent.width - 16px) / 2;
+                width: 16px;
+                y: (parent.height - 16px) / 2;
+                height: 16px;
+                background: hx.has-hover ? Theme.bg3 : transparent;
+                Path {
+                    x: 4px; y: 4px; width: 8px; height: 8px;
+                    viewbox-width: 8; viewbox-height: 8;
+                    commands: "M0 0 L8 8 M8 0 L0 8";
+                    stroke: Theme.fg; stroke-width: 1px; fill: transparent;
+                }
+                hx := TouchArea { clicked => { root.close(); } }
+            }
+        }
+        if root.item.audio: Rectangle {
+            width: 12px;
+            Path {
+                y: (parent.height - 11px) / 2;
+                width: 11px; height: 11px;
+                viewbox-width: 12; viewbox-height: 12;
+                commands: root.item.muted ? "M1.5 4.5 L3.5 4.5 L6.5 2 L6.5 10 L3.5 7.5 L1.5 7.5 Z M8 4.5 L11 7.5 M11 4.5 L8 7.5" : "M1.5 4.5 L3.5 4.5 L6.5 2 L6.5 10 L3.5 7.5 L1.5 7.5 Z M8.5 4.2 Q9.6 6 8.5 7.8";
+                stroke: snd.has-hover ? (root.item.active ? root.ink : Theme.fg) : root.ink;
+                stroke-width: 1px; fill: transparent;
+            }
+            snd := TouchArea { clicked => { root.mute(); } }
+        }
+        if root.item.active && !root.item.pinned: Rectangle {
+            width: 16px;
+            y: (parent.height - 16px) / 2;
+            height: 16px;
+            background: ax.has-hover ? (root.window-active ? Theme.bg0 : Theme.bg2) : transparent;
+            Path {
+                x: 4px; y: 4px; width: 8px; height: 8px;
+                viewbox-width: 8; viewbox-height: 8;
+                commands: "M0 0 L8 8 M8 0 L0 8";
+                stroke: ax.has-hover && root.window-active ? Theme.acc : root.ink;
+                stroke-width: 1px; fill: transparent;
+            }
+            ax := TouchArea { clicked => { root.close(); } }
+        }
+    }
+    // loading: 2px line along the bottom edge
+    if root.item.loading: Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.item.active ? Theme.mid : Theme.mid;
+        opacity: root.item.active ? 0.6 : 1;
+    }
+    // where a dragged tab will land
+    if root.drop-before: Rectangle {
+        x: -1px;
+        width: 2px;
+        background: Theme.acc;
+    }
+    if root.lifted: Rectangle {
+        border-width: 1px;
+        border-color: Theme.acc;
     }
 }
 
@@ -163,6 +291,12 @@ export component AppWindow inherits Window {
     in property <bool> window-active: true;
     in property <bool> max-hot;
     in property <bool> menu-open;
+    // tab strip
+    in property <int> hidden-left;
+    in property <int> hidden-right;
+    in property <length> strip-scroll;
+    in property <int> drag-from: -1;
+    in property <int> drop-at: -1;
 
     // ---------------------------------------------------------- events out
     callback submit(string);
@@ -182,6 +316,15 @@ export component AppWindow inherits Window {
     callback win-maximize();
     callback win-close();
     callback menu-toggle();
+    callback tab-close(int);
+    callback tab-mute(int);
+    callback tab-menu(int);
+    callback tab-hover(int, bool);
+    callback tab-drag(int, length);
+    callback tab-drop(int, length);
+    callback tab-geom(int, length, length);
+    callback strip-step(int);
+    callback strip-wheel(length);
 
     // ----------------------------------------------------------- geometry
     property <length> bar-h: 33px;
@@ -207,6 +350,11 @@ export component AppWindow inherits Window {
     out property <length> max-w: max-btn.width;
     out property <length> menu-btn-x: menu-btn.absolute-position.x;
     out property <length> menu-btn-w: menu-btn.width;
+    out property <length> strip-x: strip.absolute-position.x;
+    out property <length> strip-w: strip.width;
+    // room the tab strip may take before it scrolls
+    property <length> strip-max: max(64px, root.width - right-group.preferred-width - 260px - 34px - 34px
+        - (root.hidden-left > 0 || root.hidden-right > 0 ? 96px : 0px));
     changed drag1-x => { root.geometry-changed(); }
     changed drag2-x => { root.geometry-changed(); }
     changed drag2-w => { root.geometry-changed(); }
@@ -240,11 +388,47 @@ export component AppWindow inherits Window {
             width: root.width;
             height: 32px;
             HorizontalLayout {
-                for t[i] in root.tabs: TabCell {
-                    item: t;
-                    window-active: root.window-active;
-                    clicked => { root.tab-clicked(i); }
+                if root.hidden-left > 0: Cell {
+                    text: "‹ " + root.hidden-left;
+                    fg: Theme.mid;
+                    min-w: 48px;
+                    clicked => { root.strip-step(-1); }
                 }
+                strip := Rectangle {
+                    width: min(tabs-row.preferred-width, root.strip-max);
+                    clip: true;
+                    TouchArea {
+                        scroll-event(e) => {
+                            root.strip-wheel(e.delta-y + e.delta-x);
+                            return accept;
+                        }
+                    }
+                    tabs-row := HorizontalLayout {
+                        x: -root.strip-scroll;
+                        width: self.preferred-width;
+                        for t[i] in root.tabs: TabCell {
+                            item: t;
+                            window-active: root.window-active;
+                            lifted: i == root.drag-from;
+                            drop-before: i == root.drop-at && root.drag-from >= 0;
+                            clicked => { root.tab-clicked(i); }
+                            close => { root.tab-close(i); }
+                            mute => { root.tab-mute(i); }
+                            menu => { root.tab-menu(i); }
+                            hover(on) => { root.tab-hover(i, on); }
+                            drag-move(x) => { root.tab-drag(i, x); }
+                            drag-end(x) => { root.tab-drop(i, x); }
+                            geom(x, w) => { root.tab-geom(i, x, w); }
+                        }
+                    }
+                }
+                if root.hidden-right > 0: Cell {
+                    text: root.hidden-right + " ›";
+                    fg: Theme.mid;
+                    min-w: 48px;
+                    clicked => { root.strip-step(1); }
+                }
+                Rule { width: 1px; }
                 Cell {
                     text: "+";
                     fg: Theme.mid;
@@ -349,56 +533,58 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                     min-width: 16px;
                 }
-                Rule { width: 1px; }
-                Rectangle {
-                    width: shield-label.preferred-width + 24px;
-                    background: root.panel-open ? Theme.bg2 : (shield-ta.has-hover ? Theme.bg1 : transparent);
-                    animate background { duration: 80ms; }
-                    shield-label := HorizontalLayout {
-                        alignment: center;
-                        spacing: 8px;
-                        Text {
-                            text: root.shield-on ? "shield" : "shield off";
-                            color: !root.shield-on ? Theme.bad : (root.panel-open ? Theme.fg : Theme.mid);
-                            vertical-alignment: center;
+                right-group := HorizontalLayout {
+                    Rule { width: 1px; }
+                    Rectangle {
+                        width: shield-label.preferred-width + 24px;
+                        background: root.panel-open ? Theme.bg2 : (shield-ta.has-hover ? Theme.bg1 : transparent);
+                        animate background { duration: 80ms; }
+                        shield-label := HorizontalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            Text {
+                                text: root.shield-on ? "shield" : "shield off";
+                                color: !root.shield-on ? Theme.bad : (root.panel-open ? Theme.fg : Theme.mid);
+                                vertical-alignment: center;
+                            }
+                            if root.shield-on: Text {
+                                text: root.shield-count;
+                                color: Theme.acc;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
                         }
-                        if root.shield-on: Text {
-                            text: root.shield-count;
-                            color: Theme.acc;
-                            font-weight: 700;
-                            vertical-alignment: center;
+                        shield-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle-panel(); }
                         }
                     }
-                    shield-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.toggle-panel(); }
+                    menu-btn := IconCell {
+                        commands: "M2 3.5 L10 3.5 M2 6.5 L10 6.5 M2 9.5 L10 9.5";
+                        background: root.menu-open ? Theme.bg2 : (self.hovered ? Theme.bg1 : transparent);
+                        clicked => { root.menu-toggle(); }
                     }
-                }
-                menu-btn := IconCell {
-                    commands: "M2 3.5 L10 3.5 M2 6.5 L10 6.5 M2 9.5 L10 9.5";
-                    background: root.menu-open ? Theme.bg2 : (self.hovered ? Theme.bg1 : transparent);
-                    clicked => { root.menu-toggle(); }
-                }
-                Rule { width: root.controls ? 1px : 0px; }
-                WinButton {
-                    show: root.controls;
-                    window-active: root.window-active;
-                    commands: "M0 5.5 L10 5.5";
-                    clicked => { root.win-minimize(); }
-                }
-                max-btn := WinButton {
-                    show: root.controls;
-                    hot: root.max-hot;
-                    window-active: root.window-active;
-                    commands: root.zoomed ? "M0.5 2.5 L7.5 2.5 L7.5 9.5 L0.5 9.5 Z M2.5 2.5 L2.5 0.5 L9.5 0.5 L9.5 7.5 L7.5 7.5" : "M0.5 0.5 L9.5 0.5 L9.5 9.5 L0.5 9.5 Z";
-                    clicked => { root.win-maximize(); }
-                }
-                WinButton {
-                    show: root.controls;
-                    danger: true;
-                    window-active: root.window-active;
-                    commands: "M0 0 L10 10 M10 0 L0 10";
-                    clicked => { root.win-close(); }
+                    Rule { width: root.controls ? 1px : 0px; }
+                    WinButton {
+                        show: root.controls;
+                        window-active: root.window-active;
+                        commands: "M0 5.5 L10 5.5";
+                        clicked => { root.win-minimize(); }
+                    }
+                    max-btn := WinButton {
+                        show: root.controls;
+                        hot: root.max-hot;
+                        window-active: root.window-active;
+                        commands: root.zoomed ? "M0.5 2.5 L7.5 2.5 L7.5 9.5 L0.5 9.5 Z M2.5 2.5 L2.5 0.5 L9.5 0.5 L9.5 7.5 L7.5 7.5" : "M0.5 0.5 L9.5 0.5 L9.5 9.5 L0.5 9.5 Z";
+                        clicked => { root.win-maximize(); }
+                    }
+                    WinButton {
+                        show: root.controls;
+                        danger: true;
+                        window-active: root.window-active;
+                        commands: "M0 0 L10 10 M10 0 L0 10";
+                        clicked => { root.win-close(); }
+                    }
                 }
             }
         }

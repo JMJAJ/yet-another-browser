@@ -12,6 +12,17 @@ pub enum ChromeEvent {
     Maximized(bool),
 }
 
+/// How a popup window behaves.
+#[derive(Debug, Clone, Copy)]
+pub enum PopupKind {
+    /// Takes the keyboard; closes when it loses it.
+    Menu,
+    /// Hover card: never takes the keyboard.
+    Card,
+    /// Toast: never takes the keyboard, but its action can be clicked.
+    Toast,
+}
+
 #[cfg(windows)]
 mod popup;
 #[cfg(windows)]
@@ -65,7 +76,15 @@ mod fallback {
     pub fn is_maximized(_hwnd: isize) -> bool {
         false
     }
-    pub fn own_popup(_popup: isize, _owner: isize, _on_deactivate: impl Fn() + 'static) {}
+    pub fn own_popup(_popup: isize, _owner: isize, _kind: super::PopupKind, _on_deactivate: impl Fn() + 'static) {}
+    pub fn install_media(_wv: &wry::WebView, _on_audio: impl Fn(bool) + 'static, _on_crash: impl Fn(bool) + 'static) -> Result<(), ()> {
+        Ok(())
+    }
+    pub fn set_muted(_wv: &wry::WebView, _muted: bool) {}
+    pub fn try_suspend(_wv: &wry::WebView) {}
+    pub fn set_clipboard(_text: &str) -> bool {
+        false
+    }
     pub fn client_origin(_hwnd: isize) -> (i32, i32) {
         (0, 0)
     }

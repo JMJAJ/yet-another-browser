@@ -9,7 +9,13 @@ use crate::omnibox;
 use crate::platform::{self, ChromeEvent};
 use crate::shield::{self, params, urlparts, Layer, Ledger, Shield, ShieldEvent, Verdict};
 use crate::theme::{self, THEMES};
-use crate::{AppWindow, LayerRow, LogRow, MenuRow, MenuWindow, Suggestion, TabItem, Theme};
+use crate::{AppWindow, CardWindow, LayerRow, LogRow, MenuRow, MenuWindow, Suggestion, TabItem, Theme, ToastWindow};
+use std::collections::VecDeque as Deque;
+
+mod popups;
+mod strip;
+use popups::{Card, Toast, ToastAct, Tone};
+use strip::TabOp;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -36,6 +42,9 @@ pub enum Command {
     Panel,
     Theme,
     Quit,
+    Reopen,
+    Mute,
+    LastTab,
 }
 
 impl Command {
@@ -52,6 +61,9 @@ impl Command {
             "alt+ArrowRight" => Command::Forward,
             "alt+t" => Command::Theme,
             "ctrl+q" => Command::Quit,
+            "ctrl+shift+t" => Command::Reopen,
+            "ctrl+m" => Command::Mute,
+            "ctrl+9" => Command::LastTab,
             _ => {
                 let d = combo.strip_prefix("ctrl+")?;
                 let n: usize = d.parse().ok().filter(|n| (1..=9).contains(n))?;
@@ -86,7 +98,7 @@ pub fn combo_from_slint(text: &str, ctrl: bool, alt: bool, shift: bool) -> Optio
         "{}{}{}{}",
         if ctrl { "ctrl+" } else { "" },
         if alt { "alt+" } else { "" },
-        if shift && key == "Tab" { "shift+" } else { "" },
+        if shift { "shift+" } else { "" },
         key
     );
     Command::parse(&s).map(|_| s)
@@ -126,6 +138,22 @@ pub enum Msg {
     MenuPick(usize),
     MenuTheme(usize),
     MenuClose,
+    TabClose(usize),
+    TabMute(usize),
+    TabMenu(usize),
+    TabHover(usize, bool),
+    TabDrag(usize, f32),
+    TabDrop(usize, f32),
+    TabGeom(usize, f32, f32),
+    StripStep(i32),
+    StripWheel(f32),
+    CardShow(u64),
+    CardHide(u64),
+    ToastAction,
+    ToastHide(u64),
+    Audio(u64, bool),
+    Crashed(u64, bool),
+    Tick,
 }
 
 thread_local! {
@@ -174,6 +202,32 @@ struct Tab {
     loading: bool,
     /// Parameter-strip redirects since the last finished load (loop guard).
     strips: Rc<Cell<u8>>,
+    pinned: bool,
+    audio: bool,
+    muted: bool,
+    crashed: bool,
+    /// Put to sleep after being hidden for a while.
+    trimmed: bool,
+    hidden_since: Option<std::time::Instant>,
+}
+
+impl Tab {
+    fn new(id: u64) -> Tab {
+        Tab {
+            id,
+            wv: None,
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            strips: Rc::new(Cell::new(0)),
+            pinned: false,
+            audio: false,
+            muted: false,
+            crashed: false,
+            trimmed: false,
+            hidden_since: None,
+        }
+    }
 }
 
 pub struct App {
@@ -191,12 +245,24 @@ pub struct App {
     history: Vec<(String, String)>,
     sugg_targets: Vec<String>,
     menu: Menu,
+    card: Card,
+    toast: Toast,
+    /// Tab cell (x, width) inside the strip row, by tab index.
+    geoms: Vec<(f32, f32)>,
+    strip_scroll: f32,
+    /// (dragged tab, drop index) while a tab is being dragged.
+    drag: Option<(usize, usize)>,
+    /// Recently closed (url, title), newest first.
+    closed: Deque<(String, String)>,
+    // kept alive for its 30 s tick
+    _ticker: slint::Timer,
 }
 
 /// What a main-menu row does.
 #[derive(Clone, Copy)]
 enum MenuAct {
     Run(Command),
+    Tab(TabOp, usize),
     Nothing,
 }
 
@@ -250,6 +316,11 @@ impl App {
         menu_win.on_pick(|i| post(Msg::MenuPick(i.max(0) as usize)));
         menu_win.on_pick_theme(|i| post(Msg::MenuTheme(i.max(0) as usize)));
         menu_win.on_dismiss(|| post(Msg::MenuClose));
+        let card_win = CardWindow::new().expect("card window");
+        let toast_win = ToastWindow::new().expect("toast window");
+        toast_win.on_act(|| post(Msg::ToastAction));
+        let ticker = slint::Timer::default();
+        ticker.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(30), || post(Msg::Tick));
         App {
             ui,
             cfg,
@@ -272,6 +343,13 @@ impl App {
                 closed_at: None,
                 acts: Vec::new(),
             },
+            card: Card { win: card_win, owned: false, visible: false, seq: 0, tab: None },
+            toast: Toast { win: toast_win, owned: false, seq: 0, act: None },
+            geoms: Vec::new(),
+            strip_scroll: 0.0,
+            drag: None,
+            closed: Deque::new(),
+            _ticker: ticker,
         }
     }
 
@@ -291,73 +369,6 @@ impl App {
         hwnd_of(self.ui.window())
     }
 
-    // ------------------------------------------------------------- menus
-
-    fn open_menu(&mut self) {
-        let rows: Vec<(u8, &str, &str, MenuAct)> = vec![
-            (0, "new tab", "ctrl+t", MenuAct::Run(Command::NewTab)),
-            (0, "close tab", "ctrl+w", MenuAct::Run(Command::CloseTab)),
-            (1, "", "", MenuAct::Nothing),
-            (2, "theme", "", MenuAct::Nothing),
-            (1, "", "", MenuAct::Nothing),
-            (0, "shield", "ctrl+b", MenuAct::Run(Command::Panel)),
-            (0, "next theme", "alt+t", MenuAct::Run(Command::Theme)),
-            (1, "", "", MenuAct::Nothing),
-            (0, "quit", "ctrl+q", MenuAct::Run(Command::Quit)),
-        ];
-        let height: f32 = 12.0 + rows.iter().map(|r| match r.0 { 1 => 9.0, 2 => 30.0, _ => 26.0 }).sum::<f32>();
-        let nav: Vec<i32> = rows.iter().enumerate().filter(|(_, r)| r.0 == 0).map(|(i, _)| i as i32).collect();
-        self.menu.acts = rows.iter().map(|r| r.3).collect();
-        let model: Vec<MenuRow> = rows
-            .iter()
-            .map(|r| MenuRow { kind: r.0 as i32, label: r.1.into(), key: r.2.into(), enabled: true })
-            .collect();
-        let m = &self.menu.win;
-        m.set_rows(ModelRc::new(VecModel::from(model)));
-        m.set_nav(ModelRc::new(VecModel::from(nav)));
-        m.set_menu_w(280.0);
-        m.set_menu_h(height);
-        m.set_swatches(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.acc)).collect::<Vec<_>>())));
-        m.set_swatch_bgs(ModelRc::new(VecModel::from(THEMES.iter().map(|t| theme::color(t.bg0)).collect::<Vec<_>>())));
-        m.set_theme_index(self.theme as i32);
-        m.set_hl(-1);
-        m.set_pos(-1);
-        paint(&m.global::<Theme>(), &THEMES[self.theme], &self.cfg.font);
-
-        // the menu's right edge lines up with the right edge of the menu cell
-        let scale = self.ui.window().scale_factor();
-        let x = (self.ui.get_menu_btn_x() + self.ui.get_menu_btn_w() - 280.0).max(0.0);
-        let y = 32.0;
-        let (ox, oy) = match self.hwnd() {
-            Some(h) if cfg!(windows) => platform::client_origin(h),
-            _ => {
-                let p = self.ui.window().position();
-                (p.x, p.y)
-            }
-        };
-        m.window().set_position(slint::PhysicalPosition::new(ox + (x * scale) as i32, oy + (y * scale) as i32));
-        let _ = m.show();
-        if let (Some(popup), Some(owner)) = (hwnd_of(m.window()), self.hwnd()) {
-            if !self.menu.owned {
-                platform::own_popup(popup, owner, || post(Msg::MenuClose));
-                self.menu.owned = true;
-            }
-            platform::activate(popup);
-        }
-        m.invoke_take_keys();
-        self.menu.open = true;
-        self.menu.opened_at = std::time::Instant::now();
-        self.ui.set_menu_open(true);
-    }
-
-    fn close_menu(&mut self) {
-        if self.menu.open {
-            let _ = self.menu.win.hide();
-            self.menu.open = false;
-            self.menu.closed_at = Some(std::time::Instant::now());
-            self.ui.set_menu_open(false);
-        }
-    }
 
     // ------------------------------------------------------------- webviews
 
@@ -402,6 +413,11 @@ impl App {
         }
         let _ = platform::install_accelerators(&wv, |c| post(Msg::Key(c)));
         let _ = platform::install_focus(&wv, || post(Msg::WebFocus));
+        let _ = platform::install_media(&wv, move |on| post(Msg::Audio(id, on)), move |all| post(Msg::Crashed(id, all)));
+        if self.tabs[idx].muted {
+            platform::set_muted(&wv, true);
+        }
+        self.tabs[idx].crashed = false;
         self.tabs[idx].wv = Some(wv);
         true
     }
@@ -425,9 +441,16 @@ impl App {
     }
 
     fn show_active(&mut self) {
-        for (i, t) in self.tabs.iter().enumerate() {
+        let now = std::time::Instant::now();
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            let on = i == self.active;
+            if on {
+                t.hidden_since = None;
+                t.trimmed = false;
+            } else if t.hidden_since.is_none() {
+                t.hidden_since = Some(now);
+            }
             if let Some(wv) = &t.wv {
-                let on = i == self.active;
                 let _ = wv.set_visible(on);
                 platform::set_background(wv, !on);
             }
@@ -458,17 +481,16 @@ impl App {
     }
 
     fn new_tab(&mut self, url: Option<String>) {
+        self.new_tab_at(self.tabs.len(), url);
+    }
+
+    fn new_tab_at(&mut self, at: usize, url: Option<String>) {
         let id = self.next_id;
         self.next_id += 1;
-        self.tabs.push(Tab {
-            id,
-            wv: None,
-            url: String::new(),
-            title: String::new(),
-            loading: false,
-            strips: Rc::new(Cell::new(0)),
-        });
-        self.active = self.tabs.len() - 1;
+        let at = at.min(self.tabs.len()).max(self.tabs.iter().filter(|t| t.pinned).count());
+        self.tabs.insert(at, Tab::new(id));
+        self.geoms.clear();
+        self.active = at;
         let url = url.or_else(|| (!self.cfg.home.is_empty()).then(|| self.cfg.home.clone()));
         self.show_active();
         if let Some(u) = url {
@@ -480,20 +502,36 @@ impl App {
         if idx >= self.tabs.len() {
             return;
         }
-        let t = self.tabs.remove(idx);
-        self.ledger.forget_tab(t.id);
-        drop(t);
-        if self.tabs.is_empty() {
-            self.new_tab(None);
+        if self.tabs[idx].pinned {
+            self.toast("pinned tabs stay open · unpin it first", None, Tone::Warn);
             return;
         }
-        if self.active >= idx && self.active > 0 {
-            self.active -= 1;
+        let t = self.tabs.remove(idx);
+        self.ledger.forget_tab(t.id);
+        self.remember_closed(&t);
+        let what = if t.url.is_empty() {
+            None
+        } else {
+            Some(urlparts::split(&t.url).map_or(t.url.clone(), |p| p.host.trim_start_matches("www.").to_string()))
+        };
+        drop(t);
+        self.geoms.clear();
+        if self.tabs.is_empty() {
+            self.new_tab(None);
+        } else {
+            if self.active >= idx && self.active > 0 {
+                self.active -= 1;
+            }
+            self.show_active();
         }
-        self.show_active();
+        // closing never asks; it can always be undone
+        if let Some(host) = what {
+            self.toast(format!("closed {host}"), Some(ToastAct::Reopen), Tone::Plain);
+        }
     }
 
     fn activate(&mut self, idx: usize) {
+        self.hide_card();
         if idx < self.tabs.len() && idx != self.active {
             self.active = idx;
             self.show_active();
@@ -564,7 +602,15 @@ impl App {
                     let _ = wv.go_forward();
                 }
             }
+            Command::Reload if self.tabs[self.active].wv.is_none() && self.tabs[self.active].crashed => {
+                let url = self.tabs[self.active].url.clone();
+                self.tabs[self.active].crashed = false;
+                self.navigate_active(url);
+            }
             Command::Reload => {
+                if self.tabs[self.active].crashed {
+                    self.tabs[self.active].crashed = false;
+                }
                 let t = &self.tabs[self.active];
                 if let Some(wv) = &t.wv {
                     if t.loading {
@@ -582,6 +628,9 @@ impl App {
             Command::Quit => {
                 let _ = slint::quit_event_loop();
             }
+            Command::Reopen => self.reopen(),
+            Command::Mute => self.tab_op(TabOp::ToggleMute, self.active),
+            Command::LastTab => self.activate(self.tabs.len() - 1),
         }
     }
 
@@ -655,7 +704,7 @@ impl App {
                 if self.menu.open {
                     self.close_menu();
                 } else if !just_closed {
-                    self.open_menu();
+                    self.open_main_menu();
                 }
             }
             Msg::MenuClose => {
@@ -666,10 +715,31 @@ impl App {
             Msg::MenuPick(i) => {
                 let act = self.menu.acts.get(i).copied().unwrap_or(MenuAct::Nothing);
                 self.close_menu();
-                if let MenuAct::Run(c) = act {
-                    self.run(c);
+                match act {
+                    MenuAct::Run(c) => self.run(c),
+                    MenuAct::Tab(op, t) => self.tab_op(op, t),
+                    MenuAct::Nothing => {}
                 }
             }
+            Msg::TabClose(i) => {
+                self.hide_card();
+                self.close_tab(i);
+            }
+            Msg::TabMute(i) => self.tab_op(TabOp::ToggleMute, i),
+            Msg::TabMenu(i) => self.open_tab_menu(i),
+            Msg::TabHover(i, on) => self.on_tab_hover(i, on),
+            Msg::TabDrag(i, x) => self.tab_drag(i, x),
+            Msg::TabDrop(i, x) => self.tab_drop(i, x),
+            Msg::TabGeom(i, x, w) => self.set_geom(i, x, w),
+            Msg::StripStep(d) => self.strip_step(d),
+            Msg::StripWheel(d) => self.strip_wheel(d),
+            Msg::CardShow(seq) => self.card_timer(seq, true),
+            Msg::CardHide(seq) => self.card_timer(seq, false),
+            Msg::ToastAction => self.toast_action(),
+            Msg::ToastHide(seq) => self.hide_toast(Some(seq)),
+            Msg::Audio(id, on) => self.on_audio(id, on),
+            Msg::Crashed(id, all) => self.on_crash(id, all),
+            Msg::Tick => self.tick(),
             Msg::MenuTheme(i) => self.set_theme(i),
             Msg::Submit(input) => {
                 let sel = self.ui.get_selected().max(0) as usize;
@@ -824,6 +894,10 @@ impl App {
 
     pub fn refresh(&mut self) {
         self.update_hitmap();
+        // uses the cell geometry Slint reported for the last layout
+        if self.drag.is_none() {
+            self.update_strip();
+        }
         let ui = &self.ui;
         let a = self.active.min(self.tabs.len().saturating_sub(1));
         let Some(t) = self.tabs.get(a) else { return };
@@ -847,7 +921,16 @@ impl App {
                 } else {
                     n.to_string()
                 };
-                TabItem { label: label.into(), active: i == a, loading: tab.loading }
+                TabItem {
+                    label: label.into(),
+                    active: i == a,
+                    loading: tab.loading,
+                    pinned: tab.pinned,
+                    audio: tab.audio || tab.muted,
+                    muted: tab.muted,
+                    trimmed: tab.trimmed,
+                    crashed: tab.crashed,
+                }
             })
             .collect();
         ui.set_tabs(ModelRc::new(VecModel::from(tabs)));
